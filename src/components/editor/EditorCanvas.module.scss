@@ -77,6 +77,30 @@
     stroke: #526fe1;
     stroke-dasharray: 7 5;
   }
+  .divisionPreview {
+    stroke: #16845e;
+    stroke-width: 3;
+    stroke-dasharray: 7 5;
+  }
+  .divisionPath {
+    fill: none;
+    stroke: #16845e;
+    stroke-width: 3;
+    stroke-linejoin: round;
+  }
+  .divisionPreviewInvalid {
+    stroke: #b42332;
+    stroke-width: 2;
+    stroke-dasharray: 5 5;
+  }
+  .divisionStart {
+    fill: #dff6ea;
+    stroke: #16845e;
+  }
+  .divisionBend {
+    fill: #fff;
+    stroke: #16845e;
+  }
   .completedRoom {
     fill: rgb(82 111 225 / 16%);
     stroke: #526fe1;
@@ -180,6 +204,17 @@
     border-color: #c9d2ff;
     color: #3955bd;
     box-shadow: 0 4px 12px rgb(57 85 189 / 12%);
+  }
+}
+.invalidSnapCue {
+  .snapCursor {
+    border-color: #b42332;
+    background: rgb(255 239 241 / 80%);
+    box-shadow: 0 0 0 5px rgb(180 35 50 / 12%);
+  }
+  .snapLabel {
+    border-color: #f1b8bf;
+    color: #b42332;
   }
 }
 .emptyState {

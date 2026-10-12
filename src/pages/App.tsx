@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { EditorCanvas } from '../components/editor/EditorCanvas';
 import {
   areaFromSquareMeters,
@@ -15,9 +15,22 @@ import { useEditorStore, type EditorTool } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import styles from './App.module.scss';
 
-const tools: { id: EditorTool; label: string; icon: string; description: string }[] = [
-  { id: 'select', label: '선택', icon: '↖', description: '선택 도구' },
-  { id: 'room', label: '공간', icon: '▱', description: '점을 클릭해 벽 그리기' },
+const tools: {
+  id: EditorTool;
+  label: string;
+  icon: string;
+  description: string;
+  shortcut?: string;
+}[] = [
+  { id: 'select', label: '선택', icon: '↖', description: '선택 도구', shortcut: 'V' },
+  { id: 'room', label: '공간', icon: '▱', description: '점을 클릭해 벽 그리기', shortcut: 'R' },
+  {
+    id: 'divide',
+    label: '분할',
+    icon: '⊞',
+    description: '기존 공간을 벽으로 나누기',
+    shortcut: 'D',
+  },
   { id: 'pan', label: '이동', icon: '✥', description: '도면 이동' },
 ];
 
@@ -119,6 +132,26 @@ export function App() {
   const [areaUnit, setAreaUnit] = useState<AreaUnit>('sqm');
   const tool = useEditorStore((state) => state.tool);
   const setTool = useEditorStore((state) => state.setTool);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey)
+        return;
+      if (
+        event.target instanceof HTMLElement &&
+        (event.target.isContentEditable ||
+          event.target.closest('input, textarea, select, [contenteditable="true"]'))
+      )
+        return;
+      const shortcutTool = tools.find(
+        ({ shortcut }) => shortcut && event.code === `Key${shortcut}`,
+      );
+      if (!shortcutTool) return;
+      event.preventDefault();
+      setTool(shortcutTool.id);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [setTool]);
   const resetViewport = useEditorStore((state) => state.resetViewport);
   const activeFloorId = useEditorStore((state) => state.activeFloorId);
   const activeProjectId = useEditorStore((state) => state.activeProjectId);
@@ -166,17 +199,21 @@ export function App() {
       <main className={styles.workspace}>
         <aside className={styles.sidebar} aria-label="도구">
           <p className={styles.caption}>도구</p>
-          {tools.map(({ id, label, icon, description }) => (
+          {tools.map(({ id, label, icon, description, shortcut }) => (
             <button
               key={id}
               type="button"
               className={`${styles.tool} ${tool === id ? styles.active : ''}`}
               onClick={() => setTool(id)}
-              title={description}
+              title={shortcut ? `${description} (${shortcut})` : description}
               aria-pressed={tool === id}
+              aria-keyshortcuts={shortcut}
             >
-              <span>{icon}</span>
-              {label}
+              <span className={styles.toolIcon}>{icon}</span>
+              <span className={styles.toolLabel}>
+                {label}
+                {shortcut && <kbd className={styles.toolShortcut}>{shortcut}</kbd>}
+              </span>
             </button>
           ))}
         </aside>
@@ -307,10 +344,23 @@ export function App() {
             </section>
           )}
           <div className={styles.notice}>
-            공간 도구로 방을 만든 뒤 선택 도구에서 방 내부를 드래그해 옮기거나 점과 벽을 수정하세요.
+            공간 도구로 방을 만든 뒤 분할 도구로 첫 벽, 필요한 내부 꺾임점, 마지막 벽을 차례로
+            클릭하세요. 선택 도구로 방을 옮기거나 점과 벽을 수정할 수 있습니다.
           </div>
           <div className={styles.shortcuts}>
             <p>빠른 조작</p>
+            <span>
+              직전 점 취소 <kbd>Esc</kbd>
+            </span>
+            <span>
+              선택 도구 <kbd>V</kbd>
+            </span>
+            <span>
+              공간 도구 <kbd>R</kbd>
+            </span>
+            <span>
+              분할 도구 <kbd>D</kbd>
+            </span>
             <span>
               확대 / 축소 <kbd>휠</kbd>
             </span>

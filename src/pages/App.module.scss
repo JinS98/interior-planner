@@ -92,12 +92,31 @@
   align-items: center;
   gap: 3px;
   font-size: 11px;
-  span {
-    font-size: 21px;
-  }
   &:hover {
     background: #f2f4fa;
   }
+}
+.toolIcon {
+  font-size: 21px;
+}
+.toolLabel {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+.toolShortcut {
+  display: inline-block;
+  min-width: 13px;
+  padding: 1px 2px;
+  border: 1px solid #dce2ec;
+  border-radius: 4px;
+  background: #fff;
+  color: #718099;
+  font-family: inherit;
+  font-size: 9px;
+  line-height: 1.2;
+  text-align: center;
 }
 .active {
   background: #edf0ff;

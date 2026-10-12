@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { validatePolygon } from '../domain/geometry/polygonValidation';
+import { splitPolygon } from '../domain/geometry/polygonSplit';
 import type { RoomEditError } from '../features/room/edit';
 import type { Floor, LayoutObject, Point, Project, Room } from '../types/layout';
 
@@ -34,6 +35,7 @@ export interface ProjectState {
     data: Pick<ProjectState, 'projectsById' | 'floorsById' | 'roomsById' | 'objectsById'>,
   ) => void;
   createRoom: (floorId: string, vertices: Point[]) => boolean;
+  splitRoom: (roomId: string, path: Point[]) => boolean;
   updateRoomVertices: (roomId: string, vertices: Point[]) => RoomEditError | null;
   setTargetAreaSqm: (projectId: string, targetAreaSqm: number | null) => void;
 }
@@ -73,6 +75,41 @@ export const useProjectStore = create<ProjectState>((set) => ({
       };
     });
     return created;
+  },
+  splitRoom: (roomId, path) => {
+    let divided = false;
+    set((state) => {
+      const room = state.roomsById[roomId];
+      const floor = room && state.floorsById[room.floorId];
+      const project = floor && state.projectsById[floor.projectId];
+      if (!room || !floor || !project) return state;
+      const parts = splitPolygon(room.vertices, path);
+      if (!parts) return state;
+
+      const newRoom: Room = {
+        id: crypto.randomUUID(),
+        floorId: floor.id,
+        name: `공간 ${floor.roomIds.length + 1}`,
+        vertices: parts[1].map((point) => ({ ...point })),
+      };
+      divided = true;
+      return {
+        projectsById: {
+          ...state.projectsById,
+          [project.id]: { ...project, updatedAt: new Date().toISOString() },
+        },
+        floorsById: {
+          ...state.floorsById,
+          [floor.id]: { ...floor, roomIds: [...floor.roomIds, newRoom.id] },
+        },
+        roomsById: {
+          ...state.roomsById,
+          [roomId]: { ...room, vertices: parts[0].map((point) => ({ ...point })) },
+          [newRoom.id]: newRoom,
+        },
+      };
+    });
+    return divided;
   },
   updateRoomVertices: (roomId, vertices) => {
     const validationError = validatePolygon(vertices);

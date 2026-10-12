@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { polygonArea } from '../domain/geometry/coordinates';
 import { LOCAL_FLOOR_ID, LOCAL_PROJECT_ID, useProjectStore } from './projectStore';
 
 describe('createRoom', () => {
@@ -65,6 +66,82 @@ describe('updateRoomVertices', () => {
     const crossing = original.map((point, index) => (index === 1 ? { x: 2, y: 4 } : point));
     expect(store.updateRoomVertices(roomId, crossing)).toBe('self-intersection');
     expect(useProjectStore.getState().roomsById[roomId].vertices).toEqual(edited);
+  });
+});
+
+describe('splitRoom', () => {
+  it('replaces one 14㎡ room with three counted rooms while keeping the total area', () => {
+    const store = useProjectStore.getState();
+    const before = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].roomIds.length;
+    expect(
+      store.createRoom(LOCAL_FLOOR_ID, [
+        { x: 0, y: 0 },
+        { x: 4, y: 0 },
+        { x: 4, y: 2 },
+        { x: 2, y: 2 },
+        { x: 2, y: 5 },
+        { x: 0, y: 5 },
+      ]),
+    ).toBe(true);
+    const firstId = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].roomIds.at(-1)!;
+    expect(
+      store.splitRoom(firstId, [
+        { x: 2, y: 0 },
+        { x: 2, y: 2 },
+      ]),
+    ).toBe(true);
+    const afterFirstCut = useProjectStore.getState();
+    const addedId = afterFirstCut.floorsById[LOCAL_FLOOR_ID].roomIds.at(-1)!;
+    const largeRoomId = [firstId, addedId].find(
+      (id) => polygonArea(afterFirstCut.roomsById[id].vertices) === 10,
+    )!;
+    expect(
+      store.splitRoom(largeRoomId, [
+        { x: 0, y: 2 },
+        { x: 2, y: 2 },
+      ]),
+    ).toBe(true);
+
+    const state = useProjectStore.getState();
+    const createdIds = state.floorsById[LOCAL_FLOOR_ID].roomIds.slice(before);
+    expect(createdIds).toHaveLength(3);
+    expect(createdIds.map((id) => polygonArea(state.roomsById[id].vertices)).sort()).toEqual([
+      4, 4, 6,
+    ]);
+    expect(
+      store.splitRoom(firstId, [
+        { x: 0, y: 0 },
+        { x: 0, y: 1 },
+      ]),
+    ).toBe(false);
+    expect(useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].roomIds).toHaveLength(before + 3);
+  });
+
+  it('persists a bent divider as two rooms with 1㎡ and 5㎡ areas', () => {
+    const store = useProjectStore.getState();
+    const before = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].roomIds.length;
+    expect(
+      store.createRoom(LOCAL_FLOOR_ID, [
+        { x: 0, y: 0 },
+        { x: 3, y: 0 },
+        { x: 3, y: 2 },
+        { x: 0, y: 2 },
+      ]),
+    ).toBe(true);
+    const roomId = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].roomIds.at(-1)!;
+    expect(
+      store.splitRoom(roomId, [
+        { x: 2, y: 0 },
+        { x: 2, y: 1 },
+        { x: 3, y: 1 },
+      ]),
+    ).toBe(true);
+    const state = useProjectStore.getState();
+    const ids = state.floorsById[LOCAL_FLOOR_ID].roomIds.slice(before);
+    expect(ids).toHaveLength(2);
+    expect(
+      ids.map((id) => polygonArea(state.roomsById[id].vertices)).sort((a, b) => a - b),
+    ).toEqual([1, 5]);
   });
 });
 
