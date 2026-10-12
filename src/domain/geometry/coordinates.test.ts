@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { polygonArea, screenToWorld, worldToScreen } from './coordinates';
+import { polygonArea, polygonInteriorPoint, screenToWorld, worldToScreen } from './coordinates';
 
 describe('world/screen coordinates', () => {
   it('preserves a point across both transforms', () => {
@@ -19,5 +19,22 @@ describe('polygonArea', () => {
     ];
     expect(polygonArea(room)).toBe(12);
     expect(polygonArea([...room].reverse())).toBe(12);
+  });
+});
+
+describe('polygonInteriorPoint', () => {
+  it('places a label inside a concave U-shaped room', () => {
+    const room = [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 1, y: 3 },
+      { x: 3, y: 3 },
+      { x: 3, y: 0 },
+      { x: 4, y: 0 },
+      { x: 4, y: 4 },
+      { x: 0, y: 4 },
+    ];
+
+    expect(polygonInteriorPoint(room)).toEqual({ x: 0.5, y: 2 });
   });
 });

@@ -6,13 +6,23 @@ import {
   type PointerEvent,
   type WheelEvent,
 } from 'react';
-import { screenToWorld, worldToScreen } from '../../domain/geometry/coordinates';
+import { formatArea, type AreaUnit } from '../../domain/geometry/area';
+import { snapScreenPointToGrid } from '../../domain/geometry/gridSnap';
+import { validatePolygon } from '../../domain/geometry/polygonValidation';
+import {
+  polygonArea,
+  polygonInteriorPoint,
+  screenToWorld,
+  worldToScreen,
+} from '../../domain/geometry/coordinates';
 import { getWallSegments, type WallSegment } from '../../domain/geometry/walls';
 import { isNearRoomStart, shouldCloseRoomAt } from '../../features/room/closure';
+import { roomEditErrorMessage, translateRoomFromScreenDrag } from '../../features/room/edit';
+import { hitTestRoom } from '../../features/room/hitTest';
 import { snapRoomPoint } from '../../features/room/snap';
 import { useEditorStore } from '../../store/editorStore';
 import { useProjectStore } from '../../store/projectStore';
-import type { Point, Viewport } from '../../types/layout';
+import type { Point, Room, Viewport } from '../../types/layout';
 import styles from './EditorCanvas.module.scss';
 
 const MIN_SCALE = 20;
@@ -35,6 +45,29 @@ function WallLengthLabel({ wall, viewport }: { wall: WallSegment; viewport: View
       dominantBaseline="middle"
     >
       {Number(wall.lengthMeters.toFixed(2))}m
+    </text>
+  );
+}
+
+function RoomAreaLabel({
+  room,
+  viewport,
+  areaUnit,
+}: {
+  room: Room;
+  viewport: Viewport;
+  areaUnit: AreaUnit;
+}) {
+  const point = worldToScreen(polygonInteriorPoint(room.vertices), viewport);
+  return (
+    <text
+      className={styles.roomArea}
+      x={point.x}
+      y={point.y}
+      textAnchor="middle"
+      dominantBaseline="middle"
+    >
+      {formatArea(polygonArea(room.vertices), areaUnit)}
     </text>
   );
 }
@@ -65,25 +98,60 @@ function useSpaceKey() {
   return pressed;
 }
 
-export function EditorCanvas() {
+export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const viewport = useEditorStore((state) => state.viewport);
   const setViewport = useEditorStore((state) => state.setViewport);
   const tool = useEditorStore((state) => state.tool);
   const roomDraftVertices = useEditorStore((state) => state.roomDraftVertices);
   const addRoomDraftVertex = useEditorStore((state) => state.addRoomDraftVertex);
   const clearRoomDraft = useEditorStore((state) => state.clearRoomDraft);
+  const selectedRoomId = useEditorStore((state) => state.selectedRoomId);
+  const selectedWallIndex = useEditorStore((state) => state.selectedWallIndex);
+  const roomEditPreview = useEditorStore((state) => state.roomEditPreview);
+  const geometryError = useEditorStore((state) => state.geometryError);
+  const selectRoom = useEditorStore((state) => state.selectRoom);
+  const selectWall = useEditorStore((state) => state.selectWall);
+  const setRoomEditPreview = useEditorStore((state) => state.setRoomEditPreview);
+  const setGeometryError = useEditorStore((state) => state.setGeometryError);
   const activeFloorId = useEditorStore((state) => state.activeFloorId);
   const floor = useProjectStore((state) => state.floorsById[activeFloorId ?? '']);
   const roomsById = useProjectStore((state) => state.roomsById);
   const createRoom = useProjectStore((state) => state.createRoom);
+  const updateRoomVertices = useProjectStore((state) => state.updateRoomVertices);
   const spacePressed = useSpaceKey();
   const drag = useRef<{ pointerId: number; point: Point; viewport: Viewport } | null>(null);
   const roomClick = useRef<{ pointerId: number; point: Point } | null>(null);
+  const vertexDrag = useRef<{
+    pointerId: number;
+    roomId: string;
+    vertexIndex: number;
+    originalVertices: Point[];
+    candidate: Point[] | null;
+    valid: boolean;
+  } | null>(null);
+  const roomDrag = useRef<{
+    pointerId: number;
+    roomId: string;
+    startPoint: Point;
+    originalVertices: Point[];
+  } | null>(null);
   const [cursorWorld, setCursorWorld] = useState<Point>({ x: 0, y: 0 });
   const [hoverPoint, setHoverPoint] = useState<Point | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [movingVertex, setMovingVertex] = useState(false);
+  const [movingRoom, setMovingRoom] = useState(false);
+  const [hoveredEditVertex, setHoveredEditVertex] = useState(false);
+  const [hoveredRoomInterior, setHoveredRoomInterior] = useState(false);
   const [roomError, setRoomError] = useState<string | null>(null);
   const rooms = (floor?.roomIds ?? []).map((id) => roomsById[id]).filter((room) => room != null);
+  const displayedRooms = rooms.map((room) =>
+    roomEditPreview?.roomId === room.id ? { ...room, vertices: roomEditPreview.vertices } : room,
+  );
+  const selectedRoom = displayedRooms.find((room) => room.id === selectedRoomId);
+  const selectedWall =
+    selectedRoom && selectedWallIndex !== null
+      ? getWallSegments(selectedRoom.vertices, true)[selectedWallIndex]
+      : null;
   const screenVertices = roomDraftVertices.map((point) => worldToScreen(point, viewport));
   const draftWalls = getWallSegments(roomDraftVertices, false);
   const nearStart =
@@ -130,22 +198,91 @@ export function EditorCanvas() {
   function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
     const panGesture =
       event.button === 1 || (event.button === 0 && (spacePressed || tool === 'pan'));
-    if (!panGesture && !(event.button === 0 && tool === 'room')) return;
+    if (!panGesture && event.button !== 0) return;
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
     if (panGesture) {
+      event.currentTarget.setPointerCapture(event.pointerId);
       setHoverPoint(null);
+      setHoveredEditVertex(false);
+      setHoveredRoomInterior(false);
       drag.current = { pointerId: event.pointerId, point: localPoint(event), viewport };
       setDragging(true);
-    } else {
+    } else if (tool === 'room') {
+      event.currentTarget.setPointerCapture(event.pointerId);
       roomClick.current = { pointerId: event.pointerId, point: localPoint(event) };
+    } else if (tool === 'select') {
+      const hit = hitTestRoom(
+        rooms,
+        localPoint(event),
+        viewport,
+        event.pointerType === 'touch' ? 18 : 10,
+      );
+      if (!hit) {
+        selectRoom(null);
+        return;
+      }
+      if (hit.kind === 'wall') selectWall(hit.roomId, hit.index);
+      else selectRoom(hit.roomId);
+      if (hit.kind === 'vertex') {
+        const room = roomsById[hit.roomId];
+        if (!room) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        vertexDrag.current = {
+          pointerId: event.pointerId,
+          roomId: hit.roomId,
+          vertexIndex: hit.index,
+          originalVertices: room.vertices,
+          candidate: null,
+          valid: true,
+        };
+        setMovingVertex(true);
+      } else if (hit.kind === 'interior') {
+        const room = roomsById[hit.roomId];
+        if (!room) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        roomDrag.current = {
+          pointerId: event.pointerId,
+          roomId: hit.roomId,
+          startPoint: localPoint(event),
+          originalVertices: room.vertices,
+        };
+        setMovingRoom(true);
+      }
     }
   }
 
   function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
     const point = localPoint(event);
     const currentDrag = drag.current;
-    if (currentDrag?.pointerId === event.pointerId) {
+    const currentVertexDrag = vertexDrag.current;
+    const currentRoomDrag = roomDrag.current;
+    if (currentVertexDrag?.pointerId === event.pointerId) {
+      const nextPoint =
+        snapScreenPointToGrid(point, viewport)?.world ?? screenToWorld(point, viewport);
+      const candidate = currentVertexDrag.originalVertices.map((vertex, index) =>
+        index === currentVertexDrag.vertexIndex ? nextPoint : vertex,
+      );
+      const error = validatePolygon(candidate);
+      currentVertexDrag.valid = error === null;
+      currentVertexDrag.candidate = error ? null : candidate;
+      setRoomEditPreview(error ? null : { roomId: currentVertexDrag.roomId, vertices: candidate });
+      setGeometryError(error);
+    } else if (currentRoomDrag?.pointerId === event.pointerId) {
+      const dx = point.x - currentRoomDrag.startPoint.x;
+      const dy = point.y - currentRoomDrag.startPoint.y;
+      const moved = Math.hypot(dx, dy) > 4;
+      const candidate = moved
+        ? translateRoomFromScreenDrag(
+            currentRoomDrag.originalVertices,
+            currentRoomDrag.startPoint,
+            point,
+            viewport,
+          )
+        : null;
+      setRoomEditPreview(
+        candidate ? { roomId: currentRoomDrag.roomId, vertices: candidate } : null,
+      );
+    } else if (currentDrag?.pointerId === event.pointerId) {
       setViewport({
         ...currentDrag.viewport,
         x: currentDrag.viewport.x + point.x - currentDrag.point.x,
@@ -154,10 +291,40 @@ export function EditorCanvas() {
     } else {
       setCursorWorld(screenToWorld(point, viewport));
       setHoverPoint(event.pointerType === 'touch' ? null : point);
+      const hoveredHit = tool === 'select' ? hitTestRoom(rooms, point, viewport) : null;
+      setHoveredEditVertex(hoveredHit?.kind === 'vertex');
+      setHoveredRoomInterior(hoveredHit?.kind === 'interior');
     }
   }
 
   function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (roomDrag.current?.pointerId === event.pointerId) {
+      const edit = roomDrag.current;
+      roomDrag.current = null;
+      setMovingRoom(false);
+      setRoomEditPreview(null);
+      const point = localPoint(event);
+      if (Math.hypot(point.x - edit.startPoint.x, point.y - edit.startPoint.y) > 4) {
+        const candidate = translateRoomFromScreenDrag(
+          edit.originalVertices,
+          edit.startPoint,
+          point,
+          viewport,
+        );
+        setGeometryError(updateRoomVertices(edit.roomId, candidate));
+      }
+      return;
+    }
+    if (vertexDrag.current?.pointerId === event.pointerId) {
+      const edit = vertexDrag.current;
+      vertexDrag.current = null;
+      setMovingVertex(false);
+      setRoomEditPreview(null);
+      if (edit.valid && edit.candidate) {
+        setGeometryError(updateRoomVertices(edit.roomId, edit.candidate));
+      }
+      return;
+    }
     if (drag.current?.pointerId === event.pointerId) {
       finishInteraction();
       return;
@@ -175,6 +342,11 @@ export function EditorCanvas() {
     )
       return;
     if (isNearRoomStart(point, roomDraftVertices, viewport)) {
+      const validationError = validatePolygon(roomDraftVertices);
+      if (validationError) {
+        setRoomError(roomEditErrorMessage(validationError));
+        return;
+      }
       if (!shouldCloseRoomAt(point, roomDraftVertices, viewport)) {
         setRoomError(
           roomDraftVertices.length < 3
@@ -202,6 +374,16 @@ export function EditorCanvas() {
   function finishInteraction() {
     drag.current = null;
     roomClick.current = null;
+    if (vertexDrag.current) {
+      vertexDrag.current = null;
+      setRoomEditPreview(null);
+      setMovingVertex(false);
+    }
+    if (roomDrag.current) {
+      roomDrag.current = null;
+      setRoomEditPreview(null);
+      setMovingRoom(false);
+    }
     setDragging(false);
   }
 
@@ -213,25 +395,45 @@ export function EditorCanvas() {
   }, [clearRoomDraft]);
 
   useEffect(() => {
-    if (roomDraftVertices.length === 0) return;
+    if (roomDraftVertices.length === 0 && !movingVertex && !movingRoom) return;
     const onEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
-      cancelRoomDraft();
+      if (vertexDrag.current || roomDrag.current) {
+        vertexDrag.current = null;
+        roomDrag.current = null;
+        setRoomEditPreview(null);
+        setMovingVertex(false);
+        setMovingRoom(false);
+        setGeometryError(null);
+      } else {
+        cancelRoomDraft();
+      }
     };
     window.addEventListener('keydown', onEscape);
     return () => window.removeEventListener('keydown', onEscape);
-  }, [cancelRoomDraft, roomDraftVertices.length]);
+  }, [
+    cancelRoomDraft,
+    movingVertex,
+    movingRoom,
+    roomDraftVertices.length,
+    setGeometryError,
+    setRoomEditPreview,
+  ]);
 
   return (
     <div className={styles.wrapper}>
       <div
         aria-label="도면 편집 영역"
-        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${snapCuePoint ? styles.snapReady : ''}`}
+        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${snapCuePoint ? styles.snapReady : ''} ${tool === 'select' && !spacePressed ? styles.select : ''} ${movingVertex || (!spacePressed && tool === 'select' && hoveredEditVertex) ? styles.vertexDragging : ''} ${movingRoom ? styles.roomDragging : !movingVertex && !spacePressed && tool === 'select' && hoveredRoomInterior ? styles.roomReady : ''}`}
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
-        onPointerLeave={() => setHoverPoint(null)}
+        onPointerLeave={() => {
+          setHoverPoint(null);
+          setHoveredEditVertex(false);
+          setHoveredRoomInterior(false);
+        }}
         onPointerUp={handlePointerUp}
         onPointerCancel={finishInteraction}
         onLostPointerCapture={finishInteraction}
@@ -242,20 +444,46 @@ export function EditorCanvas() {
       >
         <div className={styles.origin} style={{ left: viewport.x, top: viewport.y }} />
         <svg className={styles.roomDraft} aria-hidden="true">
-          {rooms.map((room) => (
+          {displayedRooms.map((room) => (
             <g key={room.id}>
               <polygon
-                className={styles.completedRoom}
+                className={`${styles.completedRoom} ${room.id === selectedRoomId ? styles.selectedRoom : ''}`}
                 points={room.vertices
                   .map((vertex) => worldToScreen(vertex, viewport))
                   .map((vertex) => `${vertex.x},${vertex.y}`)
                   .join(' ')}
               />
+              <RoomAreaLabel room={room} viewport={viewport} areaUnit={areaUnit} />
               {getWallSegments(room.vertices, true).map((wall, index) => (
                 <WallLengthLabel key={index} wall={wall} viewport={viewport} />
               ))}
             </g>
           ))}
+          {tool === 'select' && selectedRoom && (
+            <g>
+              {selectedWall && (
+                <line
+                  className={styles.selectedWall}
+                  x1={worldToScreen(selectedWall.start, viewport).x}
+                  y1={worldToScreen(selectedWall.start, viewport).y}
+                  x2={worldToScreen(selectedWall.end, viewport).x}
+                  y2={worldToScreen(selectedWall.end, viewport).y}
+                />
+              )}
+              {selectedRoom.vertices.map((vertex, index) => {
+                const point = worldToScreen(vertex, viewport);
+                return (
+                  <circle
+                    key={index}
+                    className={styles.editVertex}
+                    cx={point.x}
+                    cy={point.y}
+                    r={7}
+                  />
+                );
+              })}
+            </g>
+          )}
           {draftWalls.map((wall, index) => {
             const start = worldToScreen(wall.start, viewport);
             const end = worldToScreen(wall.end, viewport);
@@ -335,6 +563,9 @@ export function EditorCanvas() {
           </span>
         )}
         {roomError && <span className={styles.error}>{roomError}</span>}
+        {geometryError && (
+          <span className={styles.error}>{roomEditErrorMessage(geometryError)}</span>
+        )}
       </div>
     </div>
   );

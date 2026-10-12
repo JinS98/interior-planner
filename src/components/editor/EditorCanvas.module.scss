@@ -24,6 +24,18 @@
 .dragging {
   cursor: grabbing;
 }
+.select {
+  cursor: default;
+}
+.vertexDragging {
+  cursor: move;
+}
+.roomReady {
+  cursor: grab;
+}
+.roomDragging {
+  cursor: grabbing;
+}
 .snapReady {
   cursor: none;
 }
@@ -71,12 +83,33 @@
     stroke-width: 3;
     stroke-linejoin: round;
   }
+  .selectedRoom {
+    fill: rgb(82 111 225 / 24%);
+    stroke: #334bc2;
+  }
+  .selectedWall {
+    stroke: #e2952a;
+    stroke-width: 5;
+  }
+  .editVertex {
+    fill: #fff;
+    stroke: #e2952a;
+    stroke-width: 3;
+  }
   .wallLength {
     fill: #263659;
     stroke: #fff;
     stroke-width: 4px;
     paint-order: stroke;
     font-size: 12px;
+    font-weight: 700;
+  }
+  .roomArea {
+    fill: #334bc2;
+    stroke: #fff;
+    stroke-width: 5px;
+    paint-order: stroke;
+    font-size: 13px;
     font-weight: 700;
   }
 }

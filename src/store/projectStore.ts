@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { polygonArea } from '../domain/geometry/coordinates';
+import { validatePolygon } from '../domain/geometry/polygonValidation';
+import type { RoomEditError } from '../features/room/edit';
 import type { Floor, LayoutObject, Point, Project, Room } from '../types/layout';
 
 export const LOCAL_PROJECT_ID = 'local-project';
@@ -33,6 +34,8 @@ export interface ProjectState {
     data: Pick<ProjectState, 'projectsById' | 'floorsById' | 'roomsById' | 'objectsById'>,
   ) => void;
   createRoom: (floorId: string, vertices: Point[]) => boolean;
+  updateRoomVertices: (roomId: string, vertices: Point[]) => RoomEditError | null;
+  setTargetAreaSqm: (projectId: string, targetAreaSqm: number | null) => void;
 }
 
 /** 향후 Firestore 저장 스냅샷의 원본. 그리기 중인 점은 여기에 넣지 않는다. */
@@ -43,7 +46,7 @@ export const useProjectStore = create<ProjectState>((set) => ({
   objectsById: {},
   replaceProjectData: (data) => set(data),
   createRoom: (floorId, vertices) => {
-    if (vertices.length < 3 || polygonArea(vertices) < 0.000001) return false;
+    if (validatePolygon(vertices)) return false;
     let created = false;
     set((state) => {
       const floor = state.floorsById[floorId];
@@ -70,5 +73,49 @@ export const useProjectStore = create<ProjectState>((set) => ({
       };
     });
     return created;
+  },
+  updateRoomVertices: (roomId, vertices) => {
+    const validationError = validatePolygon(vertices);
+    if (validationError) return validationError;
+    let found = false;
+    set((state) => {
+      const room = state.roomsById[roomId];
+      const floor = room && state.floorsById[room.floorId];
+      const project = floor && state.projectsById[floor.projectId];
+      if (!room || !floor || !project) return state;
+      found = true;
+      if (
+        room.vertices.length === vertices.length &&
+        room.vertices.every(
+          (vertex, index) => vertex.x === vertices[index].x && vertex.y === vertices[index].y,
+        )
+      ) {
+        return state;
+      }
+      return {
+        projectsById: {
+          ...state.projectsById,
+          [project.id]: { ...project, updatedAt: new Date().toISOString() },
+        },
+        roomsById: {
+          ...state.roomsById,
+          [roomId]: { ...room, vertices: vertices.map((vertex) => ({ ...vertex })) },
+        },
+      };
+    });
+    return found ? null : 'room-not-found';
+  },
+  setTargetAreaSqm: (projectId, targetAreaSqm) => {
+    if (targetAreaSqm !== null && (!Number.isFinite(targetAreaSqm) || targetAreaSqm <= 0)) return;
+    set((state) => {
+      const project = state.projectsById[projectId];
+      if (!project || project.targetAreaSqm === targetAreaSqm) return state;
+      return {
+        projectsById: {
+          ...state.projectsById,
+          [projectId]: { ...project, targetAreaSqm, updatedAt: new Date().toISOString() },
+        },
+      };
+    });
   },
 }));

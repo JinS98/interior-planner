@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Point, Viewport } from '../types/layout';
+import type { RoomEditError } from '../features/room/edit';
 import { LOCAL_FLOOR_ID, LOCAL_PROJECT_ID } from './projectStore';
 
 export type EditorTool = 'select' | 'room' | 'pan';
@@ -11,11 +12,19 @@ interface EditorState {
   tool: EditorTool;
   viewport: Viewport;
   roomDraftVertices: Point[];
+  selectedRoomId: string | null;
+  selectedWallIndex: number | null;
+  roomEditPreview: { roomId: string; vertices: Point[] } | null;
+  geometryError: RoomEditError | null;
   setTool: (tool: EditorTool) => void;
   setViewport: (viewport: Viewport) => void;
   resetViewport: () => void;
   addRoomDraftVertex: (point: Point) => void;
   clearRoomDraft: () => void;
+  selectRoom: (roomId: string | null) => void;
+  selectWall: (roomId: string, wallIndex: number) => void;
+  setRoomEditPreview: (preview: { roomId: string; vertices: Point[] } | null) => void;
+  setGeometryError: (error: RoomEditError | null) => void;
 }
 
 export const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, scale: 80 };
@@ -28,6 +37,10 @@ export const useEditorStore = create<EditorState>((set) => ({
   tool: 'select',
   viewport: DEFAULT_VIEWPORT,
   roomDraftVertices: [],
+  selectedRoomId: null,
+  selectedWallIndex: null,
+  roomEditPreview: null,
+  geometryError: null,
   setTool: (tool) => set({ tool }),
   setViewport: (viewport) => set({ viewport }),
   resetViewport: () => set({ viewport: DEFAULT_VIEWPORT }),
@@ -38,4 +51,10 @@ export const useEditorStore = create<EditorState>((set) => ({
       return { roomDraftVertices: [...state.roomDraftVertices, point] };
     }),
   clearRoomDraft: () => set({ roomDraftVertices: [] }),
+  selectRoom: (roomId) =>
+    set({ selectedRoomId: roomId, selectedWallIndex: null, geometryError: null }),
+  selectWall: (roomId, wallIndex) =>
+    set({ selectedRoomId: roomId, selectedWallIndex: wallIndex, geometryError: null }),
+  setRoomEditPreview: (preview) => set({ roomEditPreview: preview }),
+  setGeometryError: (error) => set({ geometryError: error }),
 }));

@@ -20,3 +20,31 @@ export function polygonArea(vertices: Point[]): number {
   }
   return Math.abs(doubledArea) / 2;
 }
+
+/** Returns a point inside a simple polygon for its canvas area label. */
+export function polygonInteriorPoint(vertices: Point[]): Point {
+  if (vertices.length === 0) return { x: 0, y: 0 };
+  const yValues = vertices.map((vertex) => vertex.y);
+  const scanY = (Math.min(...yValues) + Math.max(...yValues)) / 2;
+  const crossings: number[] = [];
+
+  for (let index = 0; index < vertices.length; index += 1) {
+    const start = vertices[index];
+    const end = vertices[(index + 1) % vertices.length];
+    if ((start.y <= scanY && end.y > scanY) || (end.y <= scanY && start.y > scanY)) {
+      crossings.push(start.x + ((scanY - start.y) * (end.x - start.x)) / (end.y - start.y));
+    }
+  }
+
+  crossings.sort((a, b) => a - b);
+  let widest = -1;
+  let labelX = vertices[0].x;
+  for (let index = 0; index + 1 < crossings.length; index += 2) {
+    const width = crossings[index + 1] - crossings[index];
+    if (width > widest) {
+      widest = width;
+      labelX = (crossings[index] + crossings[index + 1]) / 2;
+    }
+  }
+  return { x: labelX, y: scanY };
+}

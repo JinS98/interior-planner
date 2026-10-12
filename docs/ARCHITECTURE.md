@@ -31,6 +31,10 @@ Pan/Zoom은 `Pointer Event → Editor Store(Viewport) → 렌더링`으로 끝�
 
 공간 그리기 중인 Vertex는 Editor Store의 임시 상태에 두고, Room을 닫을 때 Project Store에 확정합니다.
 
+완성된 Room의 Vertex를 드래그할 때도 Editor Store의 미리보기 좌표로 면적과 차이를 갱신합니다. 교차·겹침·짧은 벽·면적 0 검사를 통과한 좌표만 Pointer 종료 시 Project Store에 기록합니다. 벽 길이 입력은 벽의 시작점을 고정하고 끝점을 원래 방향으로 이동시킵니다.
+
+선택 도구에서 Room 내부를 드래그하면 화면 이동량을 현재 Scale로 나누어 모든 Vertex에 같은 World 이동량을 적용합니다. 미리보기는 Editor Store에 두고 Pointer 종료 시 Project Store에 확정합니다. 꼭짓점과 벽 선택은 내부 드래그보다 우선합니다.
+
 새 Vertex의 미리보기와 확정 좌표에는 같은 Snap 판정을 적용합니다. 시작점 닫기를 우선하고, 격자와 직전 Vertex 기준 수평·수직 후보가 겹치면 두 기준에 모두 맞거나 화면에서 더 가까운 후보를 선택합니다.
 
 ## 범위 경계
