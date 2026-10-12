@@ -1,10 +1,11 @@
 import { EditorCanvas } from '../components/editor/EditorCanvas';
 import { useEditorStore, type EditorTool } from '../store/editorStore';
+import { useProjectStore } from '../store/projectStore';
 import styles from './App.module.scss';
 
 const tools: { id: EditorTool; label: string; icon: string; description: string }[] = [
   { id: 'select', label: '선택', icon: '↖', description: '선택 도구' },
-  { id: 'room', label: '공간', icon: '▱', description: '2일차 구현 예정' },
+  { id: 'room', label: '공간', icon: '▱', description: '점을 클릭해 벽 그리기' },
   { id: 'pan', label: '이동', icon: '✥', description: '도면 이동' },
 ];
 
@@ -12,6 +13,8 @@ export function App() {
   const tool = useEditorStore((state) => state.tool);
   const setTool = useEditorStore((state) => state.setTool);
   const resetViewport = useEditorStore((state) => state.resetViewport);
+  const activeFloorId = useEditorStore((state) => state.activeFloorId);
+  const floor = useProjectStore((state) => state.floorsById[activeFloorId ?? '']);
 
   return (
     <div className={styles.app}>
@@ -43,7 +46,6 @@ export function App() {
               onClick={() => setTool(id)}
               title={description}
               aria-pressed={tool === id}
-              disabled={id === 'room'}
             >
               <span>{icon}</span>
               {label}
@@ -70,14 +72,15 @@ export function App() {
           </div>
           <div className={styles.infoRow}>
             <span>공간</span>
-            <strong>0개</strong>
+            <strong>{floor?.roomIds.length ?? 0}개</strong>
           </div>
           <div className={styles.infoRow}>
             <span>오브젝트</span>
             <strong>0개</strong>
           </div>
           <div className={styles.notice}>
-            현재는 에디터 기반 화면입니다. 공간 생성과 면적 계산은 다음 작업에서 추가합니다.
+            공간 도구로 점을 세 개 이상 찍고 시작점 근처를 클릭하면 방이 완성됩니다. 면적 계산은
+            다음 작업에서 추가합니다.
           </div>
           <div className={styles.shortcuts}>
             <p>빠른 조작</p>

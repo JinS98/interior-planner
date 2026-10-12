@@ -1,5 +1,28 @@
 import { create } from 'zustand';
-import type { Floor, LayoutObject, Project, Room } from '../types/layout';
+import { polygonArea } from '../domain/geometry/coordinates';
+import type { Floor, LayoutObject, Point, Project, Room } from '../types/layout';
+
+export const LOCAL_PROJECT_ID = 'local-project';
+export const LOCAL_FLOOR_ID = 'local-floor-1';
+
+const initialProject: Project = {
+  id: LOCAL_PROJECT_ID,
+  ownerId: 'local',
+  name: '제목 없는 프로젝트',
+  purpose: 'other',
+  targetAreaSqm: null,
+  floorIds: [LOCAL_FLOOR_ID],
+  schemaVersion: 1,
+  updatedAt: new Date().toISOString(),
+};
+
+const initialFloor: Floor = {
+  id: LOCAL_FLOOR_ID,
+  projectId: LOCAL_PROJECT_ID,
+  name: '1F',
+  roomIds: [],
+  objectIds: [],
+};
 
 export interface ProjectState {
   projectsById: Record<string, Project>;
@@ -9,13 +32,43 @@ export interface ProjectState {
   replaceProjectData: (
     data: Pick<ProjectState, 'projectsById' | 'floorsById' | 'roomsById' | 'objectsById'>,
   ) => void;
+  createRoom: (floorId: string, vertices: Point[]) => boolean;
 }
 
-/** 향후 Firestore 저장 스냅샷의 원본. 드래그 중 임시 좌표는 여기에 넣지 않는다. */
+/** 향후 Firestore 저장 스냅샷의 원본. 그리기 중인 점은 여기에 넣지 않는다. */
 export const useProjectStore = create<ProjectState>((set) => ({
-  projectsById: {},
-  floorsById: {},
+  projectsById: { [LOCAL_PROJECT_ID]: initialProject },
+  floorsById: { [LOCAL_FLOOR_ID]: initialFloor },
   roomsById: {},
   objectsById: {},
   replaceProjectData: (data) => set(data),
+  createRoom: (floorId, vertices) => {
+    if (vertices.length < 3 || polygonArea(vertices) < 0.000001) return false;
+    let created = false;
+    set((state) => {
+      const floor = state.floorsById[floorId];
+      const project = floor && state.projectsById[floor.projectId];
+      if (!floor || !project) return state;
+
+      const room: Room = {
+        id: crypto.randomUUID(),
+        floorId,
+        name: `공간 ${floor.roomIds.length + 1}`,
+        vertices: vertices.map((point) => ({ ...point })),
+      };
+      created = true;
+      return {
+        projectsById: {
+          ...state.projectsById,
+          [project.id]: { ...project, updatedAt: new Date().toISOString() },
+        },
+        floorsById: {
+          ...state.floorsById,
+          [floorId]: { ...floor, roomIds: [...floor.roomIds, room.id] },
+        },
+        roomsById: { ...state.roomsById, [room.id]: room },
+      };
+    });
+    return created;
+  },
 }));

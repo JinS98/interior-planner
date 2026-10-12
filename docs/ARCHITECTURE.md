@@ -18,16 +18,20 @@
 ## 결정 사항
 
 1. 좌표의 저장 단위는 미터로 통일. Grid 기본 간격 1m, 초기 Scale 80px/m. 확대할 때 포인터 아래 World 좌표를 고정합니다.
-2. 렌더러와 Geometry 함수를 분리. 현재 Grid는 CSS 배경이고, Room/Wall은 후속 작업에서 SVG 렌더링부터 시작합니다. 대량 오브젝트 성능을 실제로 측정한 뒤 Canvas/Konva를 검토합니다.
+2. 렌더러와 Geometry 함수를 분리. Grid는 CSS 배경이고, 그리는 중인 Vertex/Wall과 완성된 Room은 SVG로 렌더링합니다. 대량 오브젝트 성능을 실제로 측정한 뒤 Canvas/Konva를 검토합니다.
 3. Firestore 영속 데이터와 에디터 임시 상태를 분리. `projectsById`, `floorsById`, `roomsById`, `objectsById`로 참조를 정규화합니다.
 4. Preview나 Pointer 이동 중 임시 좌표는 저장 스냅샷에 넣지 않고, Pointer 종료 시 한 번의 Command로 확정합니다. 이는 5일차 구현 과제입니다.
-5. Firebase는 6일차에 연결합니다. 현재는 프로젝트 Store가 비어 있고 UI 저장 버튼도 비활성입니다. 환경 변수, 실제 Firestore 보안 규칙, 오프라인 동기화는 연결 시 확정합니다.
+5. Firebase는 6일차에 연결합니다. 현재는 로컬 프로젝트와 1F를 Store에 생성하고 UI 저장 버튼은 비활성입니다. 환경 변수, 실제 Firestore 보안 규칙, 오프라인 동기화는 연결 시 확정합니다.
 
 ## 데이터 흐름 예정
 
 `Pointer Event → 화면 좌표 → World 좌표 → Geometry 검증 → Command → Project Store → Repository → Firestore`
 
 Pan/Zoom은 `Pointer Event → Editor Store(Viewport) → 렌더링`으로 끝나며 Firestore에 저장하지 않습니다.
+
+공간 그리기 중인 Vertex는 Editor Store의 임시 상태에 두고, Room을 닫을 때 Project Store에 확정합니다.
+
+새 Vertex의 미리보기와 확정 좌표에는 같은 Snap 판정을 적용합니다. 시작점 닫기를 우선하고, 격자와 직전 Vertex 기준 수평·수직 후보가 겹치면 두 기준에 모두 맞거나 화면에서 더 가까운 후보를 선택합니다.
 
 ## 범위 경계
 

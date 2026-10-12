@@ -1,11 +1,43 @@
-import { useEffect, useRef, useState, type PointerEvent, type WheelEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent,
+  type WheelEvent,
+} from 'react';
 import { screenToWorld, worldToScreen } from '../../domain/geometry/coordinates';
+import { getWallSegments, type WallSegment } from '../../domain/geometry/walls';
+import { isNearRoomStart, shouldCloseRoomAt } from '../../features/room/closure';
+import { snapRoomPoint } from '../../features/room/snap';
 import { useEditorStore } from '../../store/editorStore';
+import { useProjectStore } from '../../store/projectStore';
 import type { Point, Viewport } from '../../types/layout';
 import styles from './EditorCanvas.module.scss';
 
 const MIN_SCALE = 20;
 const MAX_SCALE = 400;
+const SNAP_LABELS = { grid: '격자에 맞춤', horizontal: '수평 보정', vertical: '수직 보정' };
+
+function WallLengthLabel({ wall, viewport }: { wall: WallSegment; viewport: Viewport }) {
+  const start = worldToScreen(wall.start, viewport);
+  const end = worldToScreen(wall.end, viewport);
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const screenLength = Math.hypot(dx, dy) || 1;
+
+  return (
+    <text
+      className={styles.wallLength}
+      x={(start.x + end.x) / 2 - (dy / screenLength) * 13}
+      y={(start.y + end.y) / 2 + (dx / screenLength) * 13}
+      textAnchor="middle"
+      dominantBaseline="middle"
+    >
+      {Number(wall.lengthMeters.toFixed(2))}m
+    </text>
+  );
+}
 
 function useSpaceKey() {
   const [pressed, setPressed] = useState(false);
@@ -37,10 +69,42 @@ export function EditorCanvas() {
   const viewport = useEditorStore((state) => state.viewport);
   const setViewport = useEditorStore((state) => state.setViewport);
   const tool = useEditorStore((state) => state.tool);
+  const roomDraftVertices = useEditorStore((state) => state.roomDraftVertices);
+  const addRoomDraftVertex = useEditorStore((state) => state.addRoomDraftVertex);
+  const clearRoomDraft = useEditorStore((state) => state.clearRoomDraft);
+  const activeFloorId = useEditorStore((state) => state.activeFloorId);
+  const floor = useProjectStore((state) => state.floorsById[activeFloorId ?? '']);
+  const roomsById = useProjectStore((state) => state.roomsById);
+  const createRoom = useProjectStore((state) => state.createRoom);
   const spacePressed = useSpaceKey();
   const drag = useRef<{ pointerId: number; point: Point; viewport: Viewport } | null>(null);
+  const roomClick = useRef<{ pointerId: number; point: Point } | null>(null);
   const [cursorWorld, setCursorWorld] = useState<Point>({ x: 0, y: 0 });
+  const [hoverPoint, setHoverPoint] = useState<Point | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [roomError, setRoomError] = useState<string | null>(null);
+  const rooms = (floor?.roomIds ?? []).map((id) => roomsById[id]).filter((room) => room != null);
+  const screenVertices = roomDraftVertices.map((point) => worldToScreen(point, viewport));
+  const draftWalls = getWallSegments(roomDraftVertices, false);
+  const nearStart =
+    tool === 'room' &&
+    !spacePressed &&
+    !dragging &&
+    hoverPoint !== null &&
+    isNearRoomStart(hoverPoint, roomDraftVertices, viewport);
+  const closeReady =
+    nearStart && hoverPoint !== null && shouldCloseRoomAt(hoverPoint, roomDraftVertices, viewport);
+  const roomSnap =
+    tool === 'room' && !spacePressed && !dragging && hoverPoint !== null && !nearStart
+      ? snapRoomPoint(hoverPoint, roomDraftVertices.at(-1), viewport)
+      : null;
+  const snapCuePoint = closeReady ? screenVertices[0] : roomSnap?.screen;
+  const snapLabel = closeReady
+    ? '클릭하여 공간 완성'
+    : roomSnap
+      ? SNAP_LABELS[roomSnap.kind]
+      : null;
+  const displayedCursorWorld = closeReady ? roomDraftVertices[0] : (roomSnap?.world ?? cursorWorld);
 
   function localPoint(event: {
     clientX: number;
@@ -64,11 +128,18 @@ export function EditorCanvas() {
   }
 
   function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (!(event.button === 1 || (event.button === 0 && (spacePressed || tool === 'pan')))) return;
+    const panGesture =
+      event.button === 1 || (event.button === 0 && (spacePressed || tool === 'pan'));
+    if (!panGesture && !(event.button === 0 && tool === 'room')) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { pointerId: event.pointerId, point: localPoint(event), viewport };
-    setDragging(true);
+    if (panGesture) {
+      setHoverPoint(null);
+      drag.current = { pointerId: event.pointerId, point: localPoint(event), viewport };
+      setDragging(true);
+    } else {
+      roomClick.current = { pointerId: event.pointerId, point: localPoint(event) };
+    }
   }
 
   function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
@@ -82,44 +153,188 @@ export function EditorCanvas() {
       });
     } else {
       setCursorWorld(screenToWorld(point, viewport));
+      setHoverPoint(event.pointerType === 'touch' ? null : point);
     }
   }
 
-  function finishDrag() {
+  function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (drag.current?.pointerId === event.pointerId) {
+      finishInteraction();
+      return;
+    }
+    const click = roomClick.current;
+    roomClick.current = null;
+    if (click?.pointerId !== event.pointerId || tool !== 'room') return;
+    const point = localPoint(event);
+    if (Math.hypot(point.x - click.point.x, point.y - click.point.y) > 4) return;
+    if (
+      point.x < 0 ||
+      point.y < 0 ||
+      point.x > event.currentTarget.clientWidth ||
+      point.y > event.currentTarget.clientHeight
+    )
+      return;
+    if (isNearRoomStart(point, roomDraftVertices, viewport)) {
+      if (!shouldCloseRoomAt(point, roomDraftVertices, viewport)) {
+        setRoomError(
+          roomDraftVertices.length < 3
+            ? '공간을 닫으려면 서로 다른 점 세 개 이상이 필요합니다.'
+            : '면적이 없는 도형은 공간으로 만들 수 없습니다.',
+        );
+        return;
+      }
+      if (!activeFloorId || !createRoom(activeFloorId, roomDraftVertices)) {
+        setRoomError('공간을 만들 수 없습니다. 점 위치를 확인해 주세요.');
+        return;
+      }
+      clearRoomDraft();
+      setHoverPoint(null);
+      setRoomError(null);
+      return;
+    }
+    addRoomDraftVertex(
+      snapRoomPoint(point, roomDraftVertices.at(-1), viewport)?.world ??
+        screenToWorld(point, viewport),
+    );
+    setRoomError(null);
+  }
+
+  function finishInteraction() {
     drag.current = null;
+    roomClick.current = null;
     setDragging(false);
   }
+
+  const cancelRoomDraft = useCallback(() => {
+    roomClick.current = null;
+    clearRoomDraft();
+    setHoverPoint(null);
+    setRoomError(null);
+  }, [clearRoomDraft]);
+
+  useEffect(() => {
+    if (roomDraftVertices.length === 0) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      cancelRoomDraft();
+    };
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
+  }, [cancelRoomDraft, roomDraftVertices.length]);
 
   return (
     <div className={styles.wrapper}>
       <div
         aria-label="도면 편집 영역"
-        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''}`}
+        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${snapCuePoint ? styles.snapReady : ''}`}
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
-        onPointerUp={finishDrag}
-        onPointerCancel={finishDrag}
-        onLostPointerCapture={finishDrag}
+        onPointerLeave={() => setHoverPoint(null)}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={finishInteraction}
+        onLostPointerCapture={finishInteraction}
         style={{
           backgroundSize: `${viewport.scale}px ${viewport.scale}px`,
           backgroundPosition: `${viewport.x}px ${viewport.y}px`,
         }}
       >
         <div className={styles.origin} style={{ left: viewport.x, top: viewport.y }} />
-        <div className={styles.emptyState}>
-          <span className={styles.emptyIcon}>◇</span>
-          <strong>새 도면을 시작할 준비가 됐어요</strong>
-          <span>휠로 확대·축소하고, Space + 드래그로 이동해 보세요.</span>
-          <small>공간 그리기는 2일차에 연결됩니다.</small>
-        </div>
+        <svg className={styles.roomDraft} aria-hidden="true">
+          {rooms.map((room) => (
+            <g key={room.id}>
+              <polygon
+                className={styles.completedRoom}
+                points={room.vertices
+                  .map((vertex) => worldToScreen(vertex, viewport))
+                  .map((vertex) => `${vertex.x},${vertex.y}`)
+                  .join(' ')}
+              />
+              {getWallSegments(room.vertices, true).map((wall, index) => (
+                <WallLengthLabel key={index} wall={wall} viewport={viewport} />
+              ))}
+            </g>
+          ))}
+          {draftWalls.map((wall, index) => {
+            const start = worldToScreen(wall.start, viewport);
+            const end = worldToScreen(wall.end, viewport);
+            return <line key={index} x1={start.x} y1={start.y} x2={end.x} y2={end.y} />;
+          })}
+          {roomSnap && screenVertices.length > 0 && (
+            <line
+              className={styles.snapPreviewWall}
+              x1={screenVertices.at(-1)!.x}
+              y1={screenVertices.at(-1)!.y}
+              x2={roomSnap.screen.x}
+              y2={roomSnap.screen.y}
+            />
+          )}
+          {closeReady && (
+            <line
+              className={styles.closingWall}
+              x1={screenVertices.at(-1)!.x}
+              y1={screenVertices.at(-1)!.y}
+              x2={screenVertices[0].x}
+              y2={screenVertices[0].y}
+            />
+          )}
+          {screenVertices.map((point, index) => (
+            <circle
+              key={index}
+              className={
+                index === 0 && roomDraftVertices.length >= 3 ? styles.closePoint : undefined
+              }
+              cx={point.x}
+              cy={point.y}
+              r={index === 0 && roomDraftVertices.length >= 3 ? 7 : 5}
+            />
+          ))}
+          {draftWalls.map((wall, index) => (
+            <WallLengthLabel key={index} wall={wall} viewport={viewport} />
+          ))}
+        </svg>
+        {snapCuePoint && (
+          <div
+            className={`${styles.snapCue} ${roomSnap ? styles.guideSnapCue : ''}`}
+            style={{ left: snapCuePoint.x, top: snapCuePoint.y }}
+            aria-hidden="true"
+          >
+            <span className={styles.snapCursor} />
+            <span className={styles.snapLabel}>{snapLabel}</span>
+          </div>
+        )}
+        {roomDraftVertices.length === 0 && rooms.length === 0 && (
+          <div className={styles.emptyState}>
+            <span className={styles.emptyIcon}>◇</span>
+            <strong>
+              {tool === 'room' ? '공간의 첫 점을 클릭하세요' : '새 도면을 시작할 준비가 됐어요'}
+            </strong>
+            <span>
+              {tool === 'room'
+                ? '세 점 이상 찍은 뒤 시작점을 클릭하면 공간이 완성됩니다.'
+                : '휠로 확대·축소하고, Space + 드래그로 이동해 보세요.'}
+            </span>
+          </div>
+        )}
       </div>
+      {roomDraftVertices.length > 0 && (
+        <button className={styles.cancelDraft} type="button" onClick={cancelRoomDraft}>
+          그리기 취소 <span>Esc</span>
+        </button>
+      )}
       <div className={styles.status}>
         <span>1칸 = 1m</span>
         <span>
-          좌표 {cursorWorld.x.toFixed(1)}m, {cursorWorld.y.toFixed(1)}m
+          좌표 {displayedCursorWorld.x.toFixed(1)}m, {displayedCursorWorld.y.toFixed(1)}m
         </span>
         <span>{Math.round((viewport.scale / 80) * 100)}%</span>
+        {roomDraftVertices.length > 0 && (
+          <span>
+            그리는 중: 점 {roomDraftVertices.length}개 · 벽 {draftWalls.length}개
+          </span>
+        )}
+        {roomError && <span className={styles.error}>{roomError}</span>}
       </div>
     </div>
   );

@@ -16,12 +16,16 @@
     linear-gradient(to right, #e7eaf0 1px, transparent 1px),
     linear-gradient(to bottom, #e7eaf0 1px, transparent 1px);
   cursor: crosshair;
+  user-select: none;
 }
 .pan {
   cursor: grab;
 }
 .dragging {
   cursor: grabbing;
+}
+.snapReady {
+  cursor: none;
 }
 .origin {
   position: absolute;
@@ -31,6 +35,119 @@
   border-radius: 50%;
   transform: translate(-50%, -50%);
   pointer-events: none;
+}
+.roomDraft {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  line {
+    stroke: #526fe1;
+    stroke-width: 3;
+    stroke-linecap: round;
+  }
+  circle {
+    fill: #fff;
+    stroke: #526fe1;
+    stroke-width: 3;
+  }
+  .closePoint {
+    fill: #dff6ea;
+    stroke: #16845e;
+  }
+  .closingWall {
+    stroke: #16845e;
+    stroke-dasharray: 7 5;
+  }
+  .snapPreviewWall {
+    stroke: #526fe1;
+    stroke-dasharray: 7 5;
+  }
+  .completedRoom {
+    fill: rgb(82 111 225 / 16%);
+    stroke: #526fe1;
+    stroke-width: 3;
+    stroke-linejoin: round;
+  }
+  .wallLength {
+    fill: #263659;
+    stroke: #fff;
+    stroke-width: 4px;
+    paint-order: stroke;
+    font-size: 12px;
+    font-weight: 700;
+  }
+}
+.cancelDraft {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  padding: 8px 11px;
+  border: 1px solid #cdd5e5;
+  border-radius: 8px;
+  background: #fff;
+  color: #33415e;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgb(25 39 69 / 8%);
+  span {
+    margin-left: 6px;
+    color: #758199;
+    font-weight: 400;
+  }
+  &:hover {
+    background: #f2f5fc;
+  }
+  &:focus-visible {
+    outline: 2px solid #526fe1;
+    outline-offset: 2px;
+  }
+}
+.snapCue {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.snapCursor {
+  position: absolute;
+  left: -12px;
+  top: -12px;
+  width: 24px;
+  height: 24px;
+  border: 2px solid #16845e;
+  border-radius: 50%;
+  background: rgb(223 246 234 / 65%);
+  box-shadow: 0 0 0 5px rgb(22 132 94 / 15%);
+}
+.snapLabel {
+  position: absolute;
+  left: 20px;
+  top: -16px;
+  padding: 6px 9px;
+  border: 1px solid #a4dcc4;
+  border-radius: 7px;
+  background: #fff;
+  color: #116647;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgb(13 87 60 / 12%);
+}
+.guideSnapCue {
+  .snapCursor {
+    border-color: #526fe1;
+    background: rgb(231 235 255 / 75%);
+    box-shadow: 0 0 0 5px rgb(82 111 225 / 15%);
+  }
+  .snapLabel {
+    border-color: #c9d2ff;
+    color: #3955bd;
+    box-shadow: 0 4px 12px rgb(57 85 189 / 12%);
+  }
 }
 .emptyState {
   position: absolute;
@@ -83,5 +200,10 @@
     background: #fff;
     color: #66738b;
     font-size: 11px;
+  }
+  .error {
+    color: #b42332;
+    border-color: #f1b8bf;
+    background: #fff4f5;
   }
 }

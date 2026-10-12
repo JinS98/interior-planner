@@ -21,8 +21,12 @@ npm run dev
 - Space + 왼쪽 드래그, 이동 도구 + 왼쪽 드래그, 가운데 버튼 드래그로 Pan
 - 화면 초기화, 좌표 표시, World ↔ Screen 변환 및 Polygon 면적 계산 유틸리티
 - 임시 에디터 상태와 저장 대상 프로젝트 상태의 분리된 Store
+- 공간 도구로 Vertex와 Wall을 그리고 시작점 근처를 클릭해 Room 생성
+- 공간 그리기 중 1m 격자 교차점 근처에서 포인터 미리보기와 클릭 좌표 보정
+- 직전 Vertex 기준 수평·수직 보정과 시작점 Snap 미리보기
+- 그리는 중인 벽과 완성된 방의 벽 길이 표시, Esc 또는 그리기 취소 버튼으로 미완성 도형 취소
 
-**진행 상태:** 1일차 기반 구현. 공간 그리기, 가구 편집, Undo/Redo, Firebase 저장은 아직 연결되지 않았습니다. 화면의 저장 버튼은 의도적으로 비활성입니다.
+**진행 상태:** 2일차 공간 그리기 구현 완료. 가구 편집, Undo/Redo, Firebase 저장은 아직 연결되지 않았습니다. 화면의 저장 버튼은 비활성입니다.
 
 ## 디렉터리
 
@@ -31,11 +35,12 @@ docs/                 일별 일정과 아키텍처 결정
 src/components/editor/ 에디터 화면과 Grid 상호작용
 src/pages/            화면 구성
 src/domain/geometry/  렌더러에 의존하지 않는 좌표·면적 계산
+src/features/room/    공간 닫기 판정
 src/store/            에디터 임시 상태와 프로젝트 데이터
 src/types/            저장 데이터의 기본 타입
 ```
 
-이후 기능은 `src/features/room`, `src/features/object`, `src/features/history`, `src/features/floor`, `src/services` 순서로 추가합니다. 빈 폴더는 미리 만들지 않았습니다.
+이후 기능은 `src/features/object`, `src/features/history`, `src/features/floor`, `src/services` 순서로 추가합니다. 빈 폴더는 미리 만들지 않았습니다.
 
 ## 데이터 및 좌표 규약
 
