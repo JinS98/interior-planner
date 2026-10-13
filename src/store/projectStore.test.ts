@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { polygonArea } from '../domain/geometry/coordinates';
+import { translateObjectFromScreenDrag } from '../features/object/edit';
 import { LOCAL_FLOOR_ID, LOCAL_PROJECT_ID, useProjectStore } from './projectStore';
 
 describe('createRoom', () => {
@@ -142,6 +143,160 @@ describe('splitRoom', () => {
     expect(
       ids.map((id) => polygonArea(state.roomsById[id].vertices)).sort((a, b) => a - b),
     ).toEqual([1, 5]);
+  });
+});
+
+describe('addPaletteItem', () => {
+  it('starts with desk and chair and registers a validated custom item for the project', () => {
+    const store = useProjectStore.getState();
+    const initialIds = store.projectsById[LOCAL_PROJECT_ID].paletteItemIds;
+    expect(initialIds.slice(0, 2)).toEqual(['desk', 'chair']);
+    const before = initialIds.length;
+    const input = {
+      name: '  소파  ',
+      category: 'furniture' as const,
+      width: 2,
+      height: 0.8,
+      color: '#123456',
+      shape: 'rectangle' as const,
+    };
+    const item = store.addPaletteItem(LOCAL_PROJECT_ID, input);
+    expect(item).toMatchObject({
+      ...input,
+      name: '소파',
+      projectId: LOCAL_PROJECT_ID,
+      builtIn: false,
+    });
+    expect(useProjectStore.getState().projectsById[LOCAL_PROJECT_ID].paletteItemIds).toHaveLength(
+      before + 1,
+    );
+    expect(useProjectStore.getState().paletteItemsById[item!.id]).toBe(item);
+
+    expect(store.addPaletteItem(LOCAL_PROJECT_ID, { ...input, name: '  ' })).toBeNull();
+    expect(store.addPaletteItem(LOCAL_PROJECT_ID, { ...input, width: 0 })).toBeNull();
+    expect(store.addPaletteItem('missing-project', input)).toBeNull();
+    expect(useProjectStore.getState().projectsById[LOCAL_PROJECT_ID].paletteItemIds).toHaveLength(
+      before + 1,
+    );
+  });
+});
+
+describe('createLayoutObject', () => {
+  it('places default and custom items by their center in the current floor', () => {
+    const store = useProjectStore.getState();
+    const pc = store.addPaletteItem(LOCAL_PROJECT_ID, {
+      name: 'PC',
+      category: 'electronics',
+      width: 0.6,
+      height: 0.5,
+      color: '#8494AD',
+      shape: 'rectangle',
+    })!;
+    const before = store.floorsById[LOCAL_FLOOR_ID].objectIds.length;
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 3, y: 2 })).toBe(true);
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'chair', { x: 5, y: 2 })).toBe(true);
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, pc.id, { x: 7, y: 2 })).toBe(true);
+
+    const state = useProjectStore.getState();
+    const ids = state.floorsById[LOCAL_FLOOR_ID].objectIds.slice(before);
+    expect(ids).toHaveLength(3);
+    expect(ids.map((id) => state.objectsById[id])).toMatchObject([
+      { type: 'desk', category: 'furniture', x: 2.3, y: 1.65, width: 1.4, height: 0.7 },
+      { type: 'chair', category: 'furniture', x: 4.7, y: 1.7, width: 0.6, height: 0.6 },
+      {
+        type: pc.id,
+        name: 'PC',
+        category: 'electronics',
+        x: 6.7,
+        y: 1.75,
+        width: 0.6,
+        height: 0.5,
+      },
+    ]);
+    expect(ids.every((id) => state.objectsById[id].floorId === LOCAL_FLOOR_ID)).toBe(true);
+  });
+
+  it('rejects missing floors and invalid coordinates without adding an object', () => {
+    const store = useProjectStore.getState();
+    const before = store.floorsById[LOCAL_FLOOR_ID].objectIds.length;
+    expect(store.createLayoutObject('missing-floor', 'desk', { x: 0, y: 0 })).toBe(false);
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: Number.NaN, y: 0 })).toBe(false);
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'missing-item', { x: 0, y: 0 })).toBe(false);
+    expect(useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds).toHaveLength(before);
+  });
+
+  it('stores custom size, color, and shape and validates later edits', () => {
+    const store = useProjectStore.getState();
+    const appearance = { width: 1.2, height: 0.8, color: '#E48A98', shape: 'triangle' as const };
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 5, y: 4 }, appearance)).toBe(true);
+    const state = useProjectStore.getState();
+    const objectId = state.floorsById[LOCAL_FLOOR_ID].objectIds.at(-1)!;
+    expect(state.objectsById[objectId]).toMatchObject({ ...appearance, x: 4.4, y: 3.6 });
+
+    expect(
+      store.updateLayoutObject(objectId, { width: 0.4, color: '#123456', shape: 'circle' }),
+    ).toBe(true);
+    expect(useProjectStore.getState().objectsById[objectId]).toMatchObject({
+      width: 0.4,
+      height: 0.8,
+      color: '#123456',
+      shape: 'circle',
+    });
+    expect(store.updateLayoutObject(objectId, { width: 0 })).toBe(false);
+    expect(store.updateLayoutObject(objectId, { color: 'red' })).toBe(false);
+    expect(useProjectStore.getState().objectsById[objectId].width).toBe(0.4);
+    expect(store.updateLayoutObject('missing-object', { width: 1 })).toBe(false);
+  });
+});
+
+describe('editing and deleting a placed object', () => {
+  it('records a completed screen drag as meter coordinates in the project', () => {
+    const store = useProjectStore.getState();
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 4, y: 3 })).toBe(true);
+    const id = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds.at(-1)!;
+    const original = useProjectStore.getState().objectsById[id];
+    const candidate = translateObjectFromScreenDrag(
+      original,
+      { x: 120, y: 100 },
+      { x: 200, y: 140 },
+      { x: 350, y: -80, scale: 80 },
+    );
+    expect(store.updateLayoutObject(id, { x: candidate.x, y: candidate.y })).toBe(true);
+    expect(useProjectStore.getState().objectsById[id]).toMatchObject({
+      x: original.x + 1,
+      y: original.y + 0.5,
+      width: original.width,
+      height: original.height,
+    });
+  });
+
+  it('updates inspector coordinates and dimensions together, including negative coordinates', () => {
+    const store = useProjectStore.getState();
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'chair', { x: 2, y: 2 })).toBe(true);
+    const id = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds.at(-1)!;
+    expect(store.updateLayoutObject(id, { x: -1.25, y: 2.5, width: 1.2, height: 0.9 })).toBe(true);
+    expect(useProjectStore.getState().objectsById[id]).toMatchObject({
+      x: -1.25,
+      y: 2.5,
+      width: 1.2,
+      height: 0.9,
+    });
+    expect(store.updateLayoutObject(id, { x: 5, width: 0 })).toBe(false);
+    expect(useProjectStore.getState().objectsById[id]).toMatchObject({ x: -1.25, width: 1.2 });
+  });
+
+  it('saves movement and rotation, then removes the object from both the floor and map', () => {
+    const store = useProjectStore.getState();
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 8, y: 8 })).toBe(true);
+    const id = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds.at(-1)!;
+    expect(store.updateLayoutObject(id, { x: 9, y: 7, rotation: 450 })).toBe(true);
+    expect(useProjectStore.getState().objectsById[id]).toMatchObject({ x: 9, y: 7, rotation: 90 });
+    expect(store.updateLayoutObject(id, { x: Number.NaN })).toBe(false);
+    expect(store.updateLayoutObject(id, { rotation: Number.POSITIVE_INFINITY })).toBe(false);
+    expect(store.deleteLayoutObject(id)).toBe(true);
+    expect(useProjectStore.getState().objectsById[id]).toBeUndefined();
+    expect(useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds).not.toContain(id);
+    expect(store.deleteLayoutObject(id)).toBe(false);
   });
 });
 

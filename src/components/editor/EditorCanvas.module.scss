@@ -21,6 +21,9 @@
 .pan {
   cursor: grab;
 }
+.objectIdle {
+  cursor: default;
+}
 .dragging {
   cursor: grabbing;
 }
@@ -35,6 +38,18 @@
 }
 .roomDragging {
   cursor: grabbing;
+}
+.objectHover {
+  cursor: grab;
+}
+.objectMoving {
+  cursor: grabbing;
+}
+.objectResizeCursor {
+  cursor: nwse-resize;
+}
+.objectRotateCursor {
+  cursor: crosshair;
 }
 .snapReady {
   cursor: none;
@@ -136,6 +151,75 @@
     font-size: 13px;
     font-weight: 700;
   }
+  .layoutObject {
+    .objectBody {
+      fill: currentColor;
+      stroke: #40516b;
+      stroke-width: 2;
+    }
+  }
+  .objectPreview {
+    opacity: 0.6;
+    .objectBody {
+      stroke-dasharray: 5 4;
+    }
+  }
+  .objectSelectionBounds {
+    fill: none;
+    stroke: #314dbf;
+    stroke-width: 2;
+    stroke-dasharray: 6 4;
+  }
+  .objectResizeHandle {
+    fill: #fff;
+    stroke: #314dbf;
+    stroke-width: 2;
+  }
+  .objectRotationStem {
+    stroke: #314dbf;
+    stroke-width: 2;
+  }
+  .objectRotationHandle {
+    fill: #fff;
+    stroke: #314dbf;
+    stroke-width: 2;
+  }
+  .objectSnapGuide {
+    line {
+      stroke: #16845e;
+      stroke-width: 1.5;
+      stroke-dasharray: 6 4;
+    }
+  }
+  .objectGapGuide {
+    line {
+      stroke: #b46a17;
+      stroke-width: 2;
+      stroke-dasharray: none;
+    }
+    text {
+      fill: #8b560f;
+      stroke: #fff;
+      stroke-width: 3px;
+      paint-order: stroke;
+      font-size: 11px;
+      font-weight: 700;
+    }
+  }
+}
+.objectPlacementHint {
+  position: absolute;
+  transform: translate(15px, -32px);
+  padding: 5px 8px;
+  border: 1px solid #c9d2ff;
+  border-radius: 7px;
+  background: #fff;
+  color: #3955bd;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgb(57 85 189 / 12%);
 }
 .cancelDraft {
   position: absolute;

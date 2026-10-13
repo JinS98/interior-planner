@@ -22,9 +22,22 @@ import { findRoomBoundarySnap } from '../../features/room/division';
 import { roomEditErrorMessage, translateRoomFromScreenDrag } from '../../features/room/edit';
 import { hitTestRoom } from '../../features/room/hitTest';
 import { snapRoomPoint } from '../../features/room/snap';
+import { layoutObjectFromPaletteItem } from '../../features/object/catalog';
+import {
+  resizeObjectFromScreenDrag,
+  rotateObjectFromScreenDrag,
+  translateObjectFromScreenDrag,
+} from '../../features/object/edit';
+import {
+  hitTestLayoutObject,
+  isNearObjectResizeHandle,
+  isNearObjectRotationHandle,
+} from '../../features/object/hitTest';
+import { snapObjectPlacement } from '../../features/object/snap';
 import { useEditorStore } from '../../store/editorStore';
 import { useProjectStore } from '../../store/projectStore';
-import type { Point, Room, Viewport } from '../../types/layout';
+import type { LayoutObject, Point, Room, Viewport } from '../../types/layout';
+import { LayoutObjectShape } from './LayoutObjectShape';
 import styles from './EditorCanvas.module.scss';
 
 const MIN_SCALE = 20;
@@ -104,6 +117,13 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const viewport = useEditorStore((state) => state.viewport);
   const setViewport = useEditorStore((state) => state.setViewport);
   const tool = useEditorStore((state) => state.tool);
+  const selectedPaletteItemId = useEditorStore((state) => state.selectedPaletteItemId);
+  const clearPaletteItem = useEditorStore((state) => state.clearPaletteItem);
+  const objectPlacement = useEditorStore((state) => state.objectPlacement);
+  const selectedObjectId = useEditorStore((state) => state.selectedObjectIds[0] ?? null);
+  const objectEditPreview = useEditorStore((state) => state.objectEditPreview);
+  const selectObject = useEditorStore((state) => state.selectObject);
+  const setObjectEditPreview = useEditorStore((state) => state.setObjectEditPreview);
   const roomDraftVertices = useEditorStore((state) => state.roomDraftVertices);
   const divisionDraft = useEditorStore((state) => state.divisionDraft);
   const addRoomDraftVertex = useEditorStore((state) => state.addRoomDraftVertex);
@@ -122,7 +142,14 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const activeFloorId = useEditorStore((state) => state.activeFloorId);
   const floor = useProjectStore((state) => state.floorsById[activeFloorId ?? '']);
   const roomsById = useProjectStore((state) => state.roomsById);
+  const objectsById = useProjectStore((state) => state.objectsById);
+  const selectedPaletteItem = useProjectStore(
+    (state) => state.paletteItemsById[selectedPaletteItemId ?? ''],
+  );
   const createRoom = useProjectStore((state) => state.createRoom);
+  const createLayoutObject = useProjectStore((state) => state.createLayoutObject);
+  const updateLayoutObject = useProjectStore((state) => state.updateLayoutObject);
+  const deleteLayoutObject = useProjectStore((state) => state.deleteLayoutObject);
   const splitRoom = useProjectStore((state) => state.splitRoom);
   const updateRoomVertices = useProjectStore((state) => state.updateRoomVertices);
   const spacePressed = useSpaceKey();
@@ -142,15 +169,56 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     startPoint: Point;
     originalVertices: Point[];
   } | null>(null);
+  const objectResize = useRef<{
+    pointerId: number;
+    startPoint: Point;
+    original: LayoutObject;
+  } | null>(null);
+  const objectMove = useRef<{
+    pointerId: number;
+    startPoint: Point;
+    original: LayoutObject;
+    viewport: Viewport;
+  } | null>(null);
+  const objectRotate = useRef<{
+    pointerId: number;
+    startPoint: Point;
+    original: LayoutObject;
+  } | null>(null);
   const [cursorWorld, setCursorWorld] = useState<Point>({ x: 0, y: 0 });
   const [hoverPoint, setHoverPoint] = useState<Point | null>(null);
   const [dragging, setDragging] = useState(false);
   const [movingVertex, setMovingVertex] = useState(false);
   const [movingRoom, setMovingRoom] = useState(false);
+  const [resizingObject, setResizingObject] = useState(false);
+  const [movingObject, setMovingObject] = useState(false);
+  const [rotatingObject, setRotatingObject] = useState(false);
+  const [hoveredObject, setHoveredObject] = useState(false);
+  const [hoveredObjectHandle, setHoveredObjectHandle] = useState(false);
+  const [hoveredObjectRotateHandle, setHoveredObjectRotateHandle] = useState(false);
   const [hoveredEditVertex, setHoveredEditVertex] = useState(false);
   const [hoveredRoomInterior, setHoveredRoomInterior] = useState(false);
   const [roomError, setRoomError] = useState<string | null>(null);
   const rooms = (floor?.roomIds ?? []).map((id) => roomsById[id]).filter((room) => room != null);
+  const objects = (floor?.objectIds ?? [])
+    .map((id) => objectsById[id])
+    .filter((object) => object != null);
+  const displayedObjects = objects.map((object) =>
+    objectEditPreview?.id === object.id ? objectEditPreview : object,
+  );
+  const selectedObject = displayedObjects.find((object) => object.id === selectedObjectId);
+  const selectedObjectOrigin = selectedObject
+    ? worldToScreen({ x: selectedObject.x, y: selectedObject.y }, viewport)
+    : null;
+  const selectedObjectCenter = selectedObject
+    ? worldToScreen(
+        {
+          x: selectedObject.x + selectedObject.width / 2,
+          y: selectedObject.y + selectedObject.height / 2,
+        },
+        viewport,
+      )
+    : null;
   const displayedRooms = rooms.map((room) =>
     roomEditPreview?.roomId === room.id ? { ...room, vertices: roomEditPreview.vertices } : room,
   );
@@ -227,6 +295,33 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const displayedCursorWorld = closeReady
     ? roomDraftVertices[0]
     : (roomSnap?.world ?? divisionSnap?.world ?? divisionInteriorSnap?.world ?? cursorWorld);
+  const placementSnap =
+    tool === 'object' && selectedPaletteItem && !spacePressed && !dragging && hoverPoint !== null
+      ? snapObjectPlacement(hoverPoint, viewport, objects, objectPlacement)
+      : null;
+  const placementCenter = placementSnap?.center ?? null;
+  const placementScreen = placementCenter ? worldToScreen(placementCenter, viewport) : null;
+  const objectPreview =
+    placementCenter && selectedPaletteItem
+      ? layoutObjectFromPaletteItem(
+          activeFloorId ?? '',
+          selectedPaletteItem,
+          placementCenter,
+          'preview',
+          objectPlacement,
+        )
+      : null;
+  const placementHint = placementSnap?.gapGuide
+    ? `같은 간격 ${Number(placementSnap.gapGuide.meters.toFixed(2))}m`
+    : placementSnap?.horizontalReference && placementSnap.verticalReference
+      ? '가로·세로 정렬'
+      : placementSnap?.horizontalReference
+        ? '가로 정렬'
+        : placementSnap?.verticalReference
+          ? '세로 정렬'
+          : placementSnap?.grid
+            ? '격자에 맞춤'
+            : '클릭하여 배치';
 
   function localPoint(event: {
     clientX: number;
@@ -261,16 +356,62 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       setHoveredRoomInterior(false);
       drag.current = { pointerId: event.pointerId, point: localPoint(event), viewport };
       setDragging(true);
-    } else if (tool === 'room' || tool === 'divide') {
+    } else if (tool === 'room' || tool === 'divide' || (tool === 'object' && selectedPaletteItem)) {
       event.currentTarget.setPointerCapture(event.pointerId);
       roomClick.current = { pointerId: event.pointerId, point: localPoint(event) };
     } else if (tool === 'select') {
-      const hit = hitTestRoom(
-        rooms,
-        localPoint(event),
-        viewport,
-        event.pointerType === 'touch' ? 18 : 10,
-      );
+      const point = localPoint(event);
+      if (
+        selectedObject &&
+        isNearObjectRotationHandle(
+          selectedObject,
+          point,
+          viewport,
+          event.pointerType === 'touch' ? 18 : 11,
+        )
+      ) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        objectRotate.current = {
+          pointerId: event.pointerId,
+          startPoint: point,
+          original: objectsById[selectedObject.id],
+        };
+        setRotatingObject(true);
+        return;
+      }
+      if (
+        selectedObject &&
+        isNearObjectResizeHandle(
+          selectedObject,
+          point,
+          viewport,
+          event.pointerType === 'touch' ? 18 : 11,
+        )
+      ) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        objectResize.current = {
+          pointerId: event.pointerId,
+          startPoint: point,
+          original: objectsById[selectedObject.id],
+        };
+        setResizingObject(true);
+        return;
+      }
+      const objectHit = hitTestLayoutObject(objects, point, viewport);
+      if (objectHit) {
+        selectObject(objectHit.id);
+        event.currentTarget.setPointerCapture(event.pointerId);
+        objectMove.current = {
+          pointerId: event.pointerId,
+          startPoint: point,
+          original: objectHit,
+          viewport,
+        };
+        setMovingObject(true);
+        return;
+      }
+      selectObject(null);
+      const hit = hitTestRoom(rooms, point, viewport, event.pointerType === 'touch' ? 18 : 10);
       if (!hit) {
         selectRoom(null);
         return;
@@ -310,7 +451,43 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     const currentDrag = drag.current;
     const currentVertexDrag = vertexDrag.current;
     const currentRoomDrag = roomDrag.current;
-    if (currentVertexDrag?.pointerId === event.pointerId) {
+    const currentObjectResize = objectResize.current;
+    const currentObjectMove = objectMove.current;
+    const currentObjectRotate = objectRotate.current;
+    if (currentObjectResize?.pointerId === event.pointerId) {
+      setObjectEditPreview(
+        resizeObjectFromScreenDrag(
+          currentObjectResize.original,
+          currentObjectResize.startPoint,
+          point,
+          viewport,
+        ),
+      );
+    } else if (currentObjectRotate?.pointerId === event.pointerId) {
+      setObjectEditPreview(
+        rotateObjectFromScreenDrag(
+          currentObjectRotate.original,
+          currentObjectRotate.startPoint,
+          point,
+          viewport,
+        ),
+      );
+    } else if (currentObjectMove?.pointerId === event.pointerId) {
+      if (
+        Math.hypot(
+          point.x - currentObjectMove.startPoint.x,
+          point.y - currentObjectMove.startPoint.y,
+        ) > 4
+      )
+        setObjectEditPreview(
+          translateObjectFromScreenDrag(
+            currentObjectMove.original,
+            currentObjectMove.startPoint,
+            point,
+            currentObjectMove.viewport,
+          ),
+        );
+    } else if (currentVertexDrag?.pointerId === event.pointerId) {
       const nextPoint =
         snapScreenPointToGrid(point, viewport)?.world ?? screenToWorld(point, viewport);
       const candidate = currentVertexDrag.originalVertices.map((vertex, index) =>
@@ -345,13 +522,78 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     } else {
       setCursorWorld(screenToWorld(point, viewport));
       setHoverPoint(event.pointerType === 'touch' ? null : point);
-      const hoveredHit = tool === 'select' ? hitTestRoom(rooms, point, viewport) : null;
+      const nearHandle =
+        tool === 'select' &&
+        selectedObject !== undefined &&
+        isNearObjectResizeHandle(selectedObject, point, viewport);
+      const nearRotateHandle =
+        tool === 'select' &&
+        selectedObject !== undefined &&
+        isNearObjectRotationHandle(selectedObject, point, viewport);
+      const objectHit = tool === 'select' ? hitTestLayoutObject(objects, point, viewport) : null;
+      setHoveredObjectHandle(nearHandle);
+      setHoveredObjectRotateHandle(nearRotateHandle);
+      setHoveredObject(objectHit !== null);
+      const hoveredHit =
+        tool === 'select' && !objectHit && !nearHandle && !nearRotateHandle
+          ? hitTestRoom(rooms, point, viewport)
+          : null;
       setHoveredEditVertex(hoveredHit?.kind === 'vertex');
       setHoveredRoomInterior(hoveredHit?.kind === 'interior');
     }
   }
 
   function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (objectResize.current?.pointerId === event.pointerId) {
+      const edit = objectResize.current;
+      objectResize.current = null;
+      setResizingObject(false);
+      setObjectEditPreview(null);
+      const candidate = resizeObjectFromScreenDrag(
+        edit.original,
+        edit.startPoint,
+        localPoint(event),
+        viewport,
+      );
+      updateLayoutObject(edit.original.id, {
+        x: candidate.x,
+        y: candidate.y,
+        width: candidate.width,
+        height: candidate.height,
+      });
+      return;
+    }
+    if (objectRotate.current?.pointerId === event.pointerId) {
+      const edit = objectRotate.current;
+      objectRotate.current = null;
+      setRotatingObject(false);
+      setObjectEditPreview(null);
+      const candidate = rotateObjectFromScreenDrag(
+        edit.original,
+        edit.startPoint,
+        localPoint(event),
+        viewport,
+      );
+      updateLayoutObject(edit.original.id, { rotation: candidate.rotation });
+      return;
+    }
+    if (objectMove.current?.pointerId === event.pointerId) {
+      const edit = objectMove.current;
+      objectMove.current = null;
+      setMovingObject(false);
+      setObjectEditPreview(null);
+      const point = localPoint(event);
+      if (Math.hypot(point.x - edit.startPoint.x, point.y - edit.startPoint.y) > 4) {
+        const candidate = translateObjectFromScreenDrag(
+          edit.original,
+          edit.startPoint,
+          point,
+          edit.viewport,
+        );
+        updateLayoutObject(edit.original.id, { x: candidate.x, y: candidate.y });
+      }
+      return;
+    }
     if (roomDrag.current?.pointerId === event.pointerId) {
       const edit = roomDrag.current;
       roomDrag.current = null;
@@ -385,7 +627,11 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     }
     const click = roomClick.current;
     roomClick.current = null;
-    if (click?.pointerId !== event.pointerId || (tool !== 'room' && tool !== 'divide')) return;
+    if (
+      click?.pointerId !== event.pointerId ||
+      (tool !== 'room' && tool !== 'divide' && tool !== 'object')
+    )
+      return;
     const point = localPoint(event);
     if (Math.hypot(point.x - click.point.x, point.y - click.point.y) > 4) return;
     if (
@@ -395,6 +641,19 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       point.y > event.currentTarget.clientHeight
     )
       return;
+    if (tool === 'object') {
+      if (!selectedPaletteItemId || !selectedPaletteItem) return;
+      const center = snapObjectPlacement(point, viewport, objects, objectPlacement).center;
+      if (
+        !activeFloorId ||
+        !createLayoutObject(activeFloorId, selectedPaletteItemId, center, objectPlacement)
+      ) {
+        setRoomError('가구를 배치할 수 없습니다. 현재 층을 확인해 주세요.');
+      } else {
+        setRoomError(null);
+      }
+      return;
+    }
     if (tool === 'divide') {
       const sourceRoom = divisionDraft && roomsById[divisionDraft.roomId];
       const snap = findRoomBoundarySnap(
@@ -488,6 +747,21 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       setRoomEditPreview(null);
       setMovingRoom(false);
     }
+    if (objectResize.current) {
+      objectResize.current = null;
+      setObjectEditPreview(null);
+      setResizingObject(false);
+    }
+    if (objectMove.current) {
+      objectMove.current = null;
+      setObjectEditPreview(null);
+      setMovingObject(false);
+    }
+    if (objectRotate.current) {
+      objectRotate.current = null;
+      setObjectEditPreview(null);
+      setRotatingObject(false);
+    }
     setDragging(false);
   }
 
@@ -510,7 +784,10 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       (tool !== 'room' || roomDraftVertices.length === 0) &&
       (tool !== 'divide' || !divisionDraft) &&
       !movingVertex &&
-      !movingRoom
+      !movingRoom &&
+      !resizingObject &&
+      !movingObject &&
+      !rotatingObject
     )
       return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -523,12 +800,26 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
         return;
       if (event.key === 'Backspace' && (tool !== 'divide' || !divisionDraft)) return;
       event.preventDefault();
-      if (event.key === 'Escape' && (vertexDrag.current || roomDrag.current)) {
+      if (
+        event.key === 'Escape' &&
+        (vertexDrag.current ||
+          roomDrag.current ||
+          objectResize.current ||
+          objectMove.current ||
+          objectRotate.current)
+      ) {
         vertexDrag.current = null;
         roomDrag.current = null;
+        objectResize.current = null;
+        objectMove.current = null;
+        objectRotate.current = null;
         setRoomEditPreview(null);
+        setObjectEditPreview(null);
         setMovingVertex(false);
         setMovingRoom(false);
+        setResizingObject(false);
+        setMovingObject(false);
+        setRotatingObject(false);
         setGeometryError(null);
       } else if (tool === 'divide' && divisionDraft) {
         undoDivisionClick();
@@ -543,25 +834,66 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     divisionDraft,
     movingVertex,
     movingRoom,
+    resizingObject,
+    movingObject,
+    rotatingObject,
     roomDraftVertices.length,
     setGeometryError,
     setRoomEditPreview,
+    setObjectEditPreview,
     undoDivisionClick,
     undoRoomDraftClick,
+  ]);
+
+  useEffect(() => {
+    if (tool !== 'select' || !selectedObjectId || movingObject || rotatingObject || resizingObject)
+      return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      if (
+        event.target instanceof HTMLElement &&
+        (event.target.isContentEditable ||
+          event.target.closest('input, textarea, select, [contenteditable="true"]'))
+      )
+        return;
+      event.preventDefault();
+      if (deleteLayoutObject(selectedObjectId)) selectObject(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    tool,
+    selectedObjectId,
+    movingObject,
+    rotatingObject,
+    resizingObject,
+    deleteLayoutObject,
+    selectObject,
   ]);
 
   return (
     <div className={styles.wrapper}>
       <div
         aria-label="도면 편집 영역"
-        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${snapCuePoint ? styles.snapReady : ''} ${tool === 'select' && !spacePressed ? styles.select : ''} ${movingVertex || (!spacePressed && tool === 'select' && hoveredEditVertex) ? styles.vertexDragging : ''} ${movingRoom ? styles.roomDragging : !movingVertex && !spacePressed && tool === 'select' && hoveredRoomInterior ? styles.roomReady : ''}`}
+        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${tool === 'object' && !selectedPaletteItem && !spacePressed ? styles.objectIdle : ''} ${snapCuePoint ? styles.snapReady : ''} ${tool === 'select' && !spacePressed ? styles.select : ''} ${movingVertex || (!spacePressed && tool === 'select' && hoveredEditVertex) ? styles.vertexDragging : ''} ${movingRoom ? styles.roomDragging : !movingVertex && !spacePressed && tool === 'select' && hoveredRoomInterior ? styles.roomReady : ''} ${!spacePressed && tool === 'select' && hoveredObject ? styles.objectHover : ''} ${movingObject ? styles.objectMoving : ''} ${resizingObject || (!spacePressed && tool === 'select' && hoveredObjectHandle) ? styles.objectResizeCursor : ''} ${rotatingObject || (!spacePressed && tool === 'select' && hoveredObjectRotateHandle) ? styles.objectRotateCursor : ''}`}
         onWheel={handleWheel}
+        onContextMenu={(event) => {
+          if (tool !== 'object') return;
+          event.preventDefault();
+          roomClick.current = null;
+          clearPaletteItem();
+          setHoverPoint(null);
+          setRoomError(null);
+        }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerLeave={() => {
           setHoverPoint(null);
           setHoveredEditVertex(false);
           setHoveredRoomInterior(false);
+          setHoveredObject(false);
+          setHoveredObjectHandle(false);
+          setHoveredObjectRotateHandle(false);
         }}
         onPointerUp={handlePointerUp}
         onPointerCancel={finishInteraction}
@@ -588,6 +920,86 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
               ))}
             </g>
           ))}
+          {displayedObjects.map((object) => (
+            <LayoutObjectShape key={object.id} object={object} viewport={viewport} />
+          ))}
+          {tool === 'select' && selectedObject && selectedObjectOrigin && selectedObjectCenter && (
+            <g
+              transform={`rotate(${selectedObject.rotation} ${selectedObjectCenter.x} ${selectedObjectCenter.y})`}
+            >
+              <rect
+                className={styles.objectSelectionBounds}
+                x={selectedObjectOrigin.x}
+                y={selectedObjectOrigin.y}
+                width={selectedObject.width * viewport.scale}
+                height={selectedObject.height * viewport.scale}
+              />
+              <rect
+                className={styles.objectResizeHandle}
+                x={selectedObjectOrigin.x + selectedObject.width * viewport.scale - 6}
+                y={selectedObjectOrigin.y + selectedObject.height * viewport.scale - 6}
+                width={12}
+                height={12}
+                rx={2}
+              />
+              <line
+                className={styles.objectRotationStem}
+                x1={selectedObjectCenter.x}
+                y1={selectedObjectOrigin.y}
+                x2={selectedObjectCenter.x}
+                y2={selectedObjectOrigin.y - 24}
+              />
+              <circle
+                className={styles.objectRotationHandle}
+                cx={selectedObjectCenter.x}
+                cy={selectedObjectOrigin.y - 24}
+                r={6}
+              />
+            </g>
+          )}
+          {placementSnap && placementScreen && (
+            <g className={styles.objectSnapGuide}>
+              {placementSnap.horizontalReference && (
+                <line
+                  x1={worldToScreen(placementSnap.horizontalReference, viewport).x}
+                  y1={placementScreen.y}
+                  x2={placementScreen.x}
+                  y2={placementScreen.y}
+                />
+              )}
+              {placementSnap.verticalReference && (
+                <line
+                  x1={placementScreen.x}
+                  y1={worldToScreen(placementSnap.verticalReference, viewport).y}
+                  x2={placementScreen.x}
+                  y2={placementScreen.y}
+                />
+              )}
+              {placementSnap.gapGuide && (
+                <g className={styles.objectGapGuide}>
+                  {[placementSnap.gapGuide.first, placementSnap.gapGuide.second].map(
+                    ([start, end], index) => {
+                      const a = worldToScreen(start, viewport);
+                      const b = worldToScreen(end, viewport);
+                      return (
+                        <g key={index}>
+                          <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} />
+                          {b.x - a.x >= 42 && (
+                            <text x={(a.x + b.x) / 2} y={a.y - 5} textAnchor="middle">
+                              {Number(placementSnap.gapGuide!.meters.toFixed(2))}m
+                            </text>
+                          )}
+                        </g>
+                      );
+                    },
+                  )}
+                </g>
+              )}
+            </g>
+          )}
+          {objectPreview && (
+            <LayoutObjectShape object={objectPreview} viewport={viewport} preview />
+          )}
           {tool === 'select' && selectedRoom && (
             <g>
               {selectedWall && (
@@ -696,7 +1108,19 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
             <span className={styles.snapLabel}>{snapLabel}</span>
           </div>
         )}
-        {roomDraftVertices.length === 0 && rooms.length === 0 && (
+        {placementScreen && (
+          <div
+            className={styles.objectPlacementHint}
+            style={{
+              left: placementScreen.x,
+              top: placementScreen.y,
+            }}
+            aria-hidden="true"
+          >
+            {placementHint}
+          </div>
+        )}
+        {roomDraftVertices.length === 0 && rooms.length === 0 && objects.length === 0 && (
           <div className={styles.emptyState}>
             <span className={styles.emptyIcon}>◇</span>
             <strong>
@@ -704,14 +1128,20 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
                 ? '공간의 첫 점을 클릭하세요'
                 : tool === 'divide'
                   ? '먼저 공간을 만들어 주세요'
-                  : '새 도면을 시작할 준비가 됐어요'}
+                  : tool === 'object'
+                    ? selectedPaletteItem
+                      ? '도면을 클릭해 물품을 배치하세요'
+                      : '배치할 물품을 선택하세요'
+                    : '새 도면을 시작할 준비가 됐어요'}
             </strong>
             <span>
               {tool === 'room'
                 ? '세 점 이상 찍은 뒤 시작점을 클릭하면 공간이 완성됩니다.'
                 : tool === 'divide'
                   ? '경계에서 시작해 내부 꺾임점을 찍고 다른 경계에서 끝내세요.'
-                  : '휠로 확대·축소하고, Space + 드래그로 이동해 보세요.'}
+                  : tool === 'object'
+                    ? '오른쪽 Palette에서 물품을 선택하거나 추가할 수 있습니다.'
+                    : '휠로 확대·축소하고, Space + 드래그로 이동해 보세요.'}
             </span>
           </div>
         )}
@@ -742,6 +1172,13 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
             {divisionDraft
               ? '분할 중: 내부 점으로 꺾고 경계에서 마무리 · Esc로 직전 점 취소'
               : '분할: 첫 번째 벽을 클릭하세요'}
+          </span>
+        )}
+        {tool === 'object' && (
+          <span>
+            {selectedPaletteItem
+              ? '물품 배치: 가로·세로/같은 간격 보정 · 우클릭으로 선택 해제'
+              : '물품을 선택하세요 · V로 선택 도구'}
           </span>
         )}
         {roomError && <span className={styles.error}>{roomError}</span>}

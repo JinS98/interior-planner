@@ -208,6 +208,313 @@
   padding-top: 18px;
   border-top: 1px solid #e8ebf1;
 }
+.objectPalette {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid #e8ebf1;
+  h3 {
+    margin: 0;
+    color: #293850;
+    font-size: 13px;
+  }
+  p {
+    margin: 6px 0 12px;
+    color: #718099;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+}
+.presetList {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.presetButton {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #dce2ec;
+  border-radius: 9px;
+  background: #fff;
+  color: #293850;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  &:hover,
+  &[aria-pressed='true'] {
+    border-color: #8295ec;
+    background: #f2f5ff;
+  }
+  &:focus-visible {
+    outline: 2px solid #526fe1;
+    outline-offset: 2px;
+  }
+}
+.presetIcon {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  flex: none;
+  border-radius: 7px;
+  background: #f4e5d3;
+  color: #9a6038;
+  font-size: 18px;
+}
+.presetName {
+  font-size: 12px;
+  font-weight: 700;
+}
+.presetSize {
+  margin-left: auto;
+  color: #8996aa;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.objectPalette .paletteEmptySelection {
+  margin-top: 12px;
+  padding: 8px;
+  border: 1px solid #e2e8f5;
+  border-radius: 8px;
+  background: #f8faff;
+}
+.paletteAddButton {
+  width: 100%;
+  margin-top: 9px;
+  padding: 9px;
+  border: 1px dashed #9caadd;
+  border-radius: 8px;
+  background: #f8faff;
+  color: #3955bd;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+.paletteCreateForm {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  margin-top: 11px;
+  padding: 12px 9px;
+  border: 1px solid #dce2ec;
+  border-radius: 9px;
+  h4 {
+    margin: 0;
+    font-size: 12px;
+  }
+}
+.paletteCreateField {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: #718099;
+  font-size: 11px;
+  input,
+  select {
+    width: 100%;
+    padding: 7px;
+    border: 1px solid #dce2ec;
+    border-radius: 7px;
+    background: #fff;
+    color: #293850;
+    font: inherit;
+    font-size: 12px;
+  }
+}
+.paletteCreateActions {
+  display: flex;
+  gap: 7px;
+  button {
+    flex: 1;
+    padding: 7px;
+    border: 1px solid #dce2ec;
+    border-radius: 7px;
+    background: #fff;
+    color: #293850;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+  }
+  button[type='submit'] {
+    border-color: #526fe1;
+    background: #526fe1;
+    color: #fff;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+.paletteAddButton:focus-visible,
+.paletteCreateActions button:focus-visible,
+.paletteCreateField input:focus-visible,
+.paletteCreateField select:focus-visible {
+  outline: 2px solid #526fe1;
+  outline-offset: 2px;
+}
+.paletteSettings,
+.objectEditSection {
+  margin-top: 16px;
+  padding-top: 15px;
+  border-top: 1px solid #e8ebf1;
+  h3,
+  h4 {
+    margin: 0 0 10px;
+    color: #293850;
+    font-size: 13px;
+  }
+  p {
+    margin: 0 0 12px;
+    color: #718099;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+}
+.objectEditSection {
+  margin-top: 22px;
+}
+.objectAppearance {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.objectPositionControls {
+  margin-bottom: 15px;
+  .objectFieldLabel {
+    display: block;
+    margin-bottom: 7px;
+  }
+}
+.objectSizeRow {
+  display: flex;
+  gap: 8px;
+}
+.objectSizeField,
+.objectRotationField {
+  flex: 1;
+  min-width: 0;
+  color: #718099;
+  font-size: 11px;
+  span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 5px;
+    padding: 5px 7px;
+    border: 1px solid #dce2ec;
+    border-radius: 7px;
+    color: #718099;
+    &:focus-within {
+      border-color: #526fe1;
+    }
+  }
+  input {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    color: #293850;
+    font: inherit;
+    font-size: 12px;
+  }
+}
+.objectRotationField {
+  display: block;
+  margin-top: 14px;
+}
+.objectDeleteButton {
+  width: 100%;
+  margin-top: 14px;
+  padding: 9px;
+  border: 1px solid #efc4c9;
+  border-radius: 8px;
+  background: #fff7f8;
+  color: #a92739;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  &:hover {
+    background: #ffebee;
+  }
+  &:focus-visible {
+    outline: 2px solid #b42332;
+    outline-offset: 2px;
+  }
+}
+.objectFieldLabel {
+  margin-top: 4px;
+  color: #718099;
+  font-size: 11px;
+}
+.objectShapeOptions,
+.objectColorOptions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.objectShapeOptions button {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 5px 2px;
+  border: 1px solid #dce2ec;
+  border-radius: 7px;
+  background: #fff;
+  color: #66738b;
+  cursor: pointer;
+  font-size: 10px;
+  span {
+    font-size: 17px;
+    line-height: 1;
+  }
+  &[aria-pressed='true'] {
+    border-color: #8295ec;
+    background: #f2f5ff;
+    color: #3955bd;
+  }
+}
+.objectColorSwatch {
+  width: 23px;
+  height: 23px;
+  flex: none;
+  padding: 0;
+  border: 1px solid rgb(38 54 79 / 20%);
+  border-radius: 50%;
+  cursor: pointer;
+  &[aria-pressed='true'] {
+    outline: 2px solid #3955bd;
+    outline-offset: 2px;
+  }
+}
+.customColor {
+  width: 27px;
+  height: 27px;
+  margin-left: auto;
+  overflow: hidden;
+  border: 1px solid #dce2ec;
+  border-radius: 7px;
+  cursor: pointer;
+  input {
+    width: 36px;
+    height: 36px;
+    margin: -5px;
+    border: 0;
+    cursor: pointer;
+  }
+}
+.objectShapeOptions button:focus-visible,
+.objectColorSwatch:focus-visible,
+.customColor:focus-within {
+  outline: 2px solid #526fe1;
+  outline-offset: 2px;
+}
 .areaTotal,
 .roomAreaList li {
   display: flex;

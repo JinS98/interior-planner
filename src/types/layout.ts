@@ -27,6 +27,8 @@ export interface Floor {
   objectIds: string[];
 }
 
+export type ObjectShape = 'rectangle' | 'circle' | 'triangle';
+
 export interface LayoutObject {
   id: string;
   floorId: string;
@@ -37,8 +39,21 @@ export interface LayoutObject {
   y: number;
   width: number;
   height: number;
+  color: string;
+  shape: ObjectShape;
   rotation: number;
   locked: boolean;
+}
+
+export type ObjectAppearance = Pick<LayoutObject, 'width' | 'height' | 'color' | 'shape'>;
+
+/** 팔레트 항목은 프로젝트에 속하며, 배치된 오브젝트는 당시 속성을 별도로 보관한다. */
+export interface PaletteItem extends ObjectAppearance {
+  id: string;
+  projectId: string;
+  name: string;
+  category: LayoutObject['category'];
+  builtIn: boolean;
 }
 
 export interface Project {
@@ -48,6 +63,7 @@ export interface Project {
   purpose: 'residential' | 'cafe' | 'restaurant' | 'pc-cafe' | 'office' | 'other';
   targetAreaSqm: number | null;
   floorIds: string[];
+  paletteItemIds: string[];
   schemaVersion: 1;
   updatedAt: string;
 }

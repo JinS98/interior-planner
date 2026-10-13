@@ -57,3 +57,54 @@ describe('undoing draft clicks', () => {
     expect(useEditorStore.getState().divisionDraft).toBeNull();
   });
 });
+
+describe('selecting a furniture preset', () => {
+  it('returns to an unselected object tool state without changing tools or objects', () => {
+    const store = useEditorStore.getState();
+    const before = useProjectStore.getState().objectsById;
+    store.clearPaletteItem();
+    store.setTool('object');
+    expect(useEditorStore.getState().selectedPaletteItemId).toBeNull();
+    store.setPaletteItem(useProjectStore.getState().paletteItemsById.desk);
+    expect(useEditorStore.getState().selectedPaletteItemId).toBe('desk');
+    store.clearPaletteItem();
+    expect(useEditorStore.getState()).toMatchObject({
+      tool: 'object',
+      selectedPaletteItemId: null,
+    });
+    expect(useProjectStore.getState().objectsById).toBe(before);
+    store.setTool('select');
+  });
+
+  it('activates placement without modifying completed project objects', () => {
+    const before = useProjectStore.getState().objectsById;
+    const item = useProjectStore.getState().paletteItemsById.chair;
+    useEditorStore.getState().setPaletteItem(item);
+    expect(useEditorStore.getState()).toMatchObject({
+      tool: 'object',
+      selectedPaletteItemId: 'chair',
+    });
+    expect(useProjectStore.getState().objectsById).toBe(before);
+    useEditorStore.getState().setTool('select');
+  });
+
+  it('keeps custom placement options until another preset is chosen', () => {
+    const store = useEditorStore.getState();
+    store.setPaletteItem(useProjectStore.getState().paletteItemsById.desk);
+    store.setObjectPlacement({ width: 2, color: '#123456', shape: 'triangle' });
+    expect(useEditorStore.getState().objectPlacement).toMatchObject({
+      width: 2,
+      color: '#123456',
+      shape: 'triangle',
+    });
+    store.setObjectPlacement({ width: 0 });
+    expect(useEditorStore.getState().objectPlacement.width).toBe(2);
+    store.setPaletteItem(useProjectStore.getState().paletteItemsById.chair);
+    expect(useEditorStore.getState().objectPlacement).toMatchObject({
+      width: 0.6,
+      height: 0.6,
+      shape: 'circle',
+    });
+    store.setTool('select');
+  });
+});

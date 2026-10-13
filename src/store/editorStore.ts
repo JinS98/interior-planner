@@ -1,15 +1,19 @@
 import { create } from 'zustand';
-import type { Point, Viewport } from '../types/layout';
+import type { LayoutObject, ObjectAppearance, PaletteItem, Point, Viewport } from '../types/layout';
 import type { RoomEditError } from '../features/room/edit';
+import { defaultObjectAppearance, isValidObjectAppearance } from '../features/object/catalog';
 import { LOCAL_FLOOR_ID, LOCAL_PROJECT_ID } from './projectStore';
 
-export type EditorTool = 'select' | 'room' | 'divide' | 'pan';
+export type EditorTool = 'select' | 'room' | 'divide' | 'object' | 'pan';
 
 interface EditorState {
   activeProjectId: string | null;
   activeFloorId: string | null;
   selectedObjectIds: string[];
   tool: EditorTool;
+  selectedPaletteItemId: string | null;
+  objectPlacement: ObjectAppearance;
+  objectEditPreview: LayoutObject | null;
   viewport: Viewport;
   roomDraftVertices: Point[];
   divisionDraft: { roomId: string; points: Point[] } | null;
@@ -18,6 +22,11 @@ interface EditorState {
   roomEditPreview: { roomId: string; vertices: Point[] } | null;
   geometryError: RoomEditError | null;
   setTool: (tool: EditorTool) => void;
+  setPaletteItem: (item: PaletteItem) => void;
+  clearPaletteItem: () => void;
+  setObjectPlacement: (patch: Partial<ObjectAppearance>) => void;
+  selectObject: (objectId: string | null) => void;
+  setObjectEditPreview: (preview: LayoutObject | null) => void;
   setViewport: (viewport: Viewport) => void;
   resetViewport: () => void;
   addRoomDraftVertex: (point: Point) => void;
@@ -39,6 +48,9 @@ export const useEditorStore = create<EditorState>((set) => ({
   activeFloorId: LOCAL_FLOOR_ID,
   selectedObjectIds: [],
   tool: 'select',
+  selectedPaletteItemId: null,
+  objectPlacement: defaultObjectAppearance('desk'),
+  objectEditPreview: null,
   viewport: DEFAULT_VIEWPORT,
   roomDraftVertices: [],
   divisionDraft: null,
@@ -47,6 +59,32 @@ export const useEditorStore = create<EditorState>((set) => ({
   roomEditPreview: null,
   geometryError: null,
   setTool: (tool) => set((state) => (state.tool === tool ? state : { tool, divisionDraft: null })),
+  setPaletteItem: (item) =>
+    set({
+      selectedPaletteItemId: item.id,
+      objectPlacement: {
+        width: item.width,
+        height: item.height,
+        color: item.color,
+        shape: item.shape,
+      },
+      tool: 'object',
+      divisionDraft: null,
+    }),
+  clearPaletteItem: () => set({ selectedPaletteItemId: null }),
+  setObjectPlacement: (patch) =>
+    set((state) => {
+      const objectPlacement = { ...state.objectPlacement, ...patch };
+      return isValidObjectAppearance(objectPlacement) ? { objectPlacement } : state;
+    }),
+  selectObject: (objectId) =>
+    set({
+      selectedObjectIds: objectId ? [objectId] : [],
+      selectedRoomId: null,
+      selectedWallIndex: null,
+      geometryError: null,
+    }),
+  setObjectEditPreview: (objectEditPreview) => set({ objectEditPreview }),
   setViewport: (viewport) => set({ viewport }),
   resetViewport: () => set({ viewport: DEFAULT_VIEWPORT }),
   addRoomDraftVertex: (point) =>
@@ -72,9 +110,19 @@ export const useEditorStore = create<EditorState>((set) => ({
       };
     }),
   selectRoom: (roomId) =>
-    set({ selectedRoomId: roomId, selectedWallIndex: null, geometryError: null }),
+    set({
+      selectedRoomId: roomId,
+      selectedWallIndex: null,
+      selectedObjectIds: [],
+      geometryError: null,
+    }),
   selectWall: (roomId, wallIndex) =>
-    set({ selectedRoomId: roomId, selectedWallIndex: wallIndex, geometryError: null }),
+    set({
+      selectedRoomId: roomId,
+      selectedWallIndex: wallIndex,
+      selectedObjectIds: [],
+      geometryError: null,
+    }),
   setRoomEditPreview: (preview) => set({ roomEditPreview: preview }),
   setGeometryError: (error) => set({ geometryError: error }),
 }));

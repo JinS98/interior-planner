@@ -18,8 +18,8 @@
 ## 결정 사항
 
 1. 좌표의 저장 단위는 미터로 통일. Grid 기본 간격 1m, 초기 Scale 80px/m. 확대할 때 포인터 아래 World 좌표를 고정합니다.
-2. 렌더러와 Geometry 함수를 분리. Grid는 CSS 배경이고, 그리는 중인 Vertex/Wall과 완성된 Room은 SVG로 렌더링합니다. 대량 오브젝트 성능을 실제로 측정한 뒤 Canvas/Konva를 검토합니다.
-3. Firestore 영속 데이터와 에디터 임시 상태를 분리. `projectsById`, `floorsById`, `roomsById`, `objectsById`로 참조를 정규화합니다.
+2. 렌더러와 Geometry 함수를 분리. Grid는 CSS 배경이고, 그리는 중인 Vertex/Wall과 완성된 Room 및 오브젝트는 SVG로 렌더링합니다. 대량 오브젝트 성능을 실제로 측정한 뒤 Canvas/Konva를 검토합니다.
+3. Firestore 영속 데이터와 에디터 임시 상태를 분리. `projectsById`, `floorsById`, `roomsById`, `objectsById`, `paletteItemsById`로 참조를 정규화합니다.
 4. Preview나 Pointer 이동 중 임시 좌표는 저장 스냅샷에 넣지 않고, Pointer 종료 시 한 번의 Command로 확정합니다. 이는 5일차 구현 과제입니다.
 5. Firebase는 6일차에 연결합니다. 현재는 로컬 프로젝트와 1F를 Store에 생성하고 UI 저장 버튼은 비활성입니다. 환경 변수, 실제 Firestore 보안 규칙, 오프라인 동기화는 연결 시 확정합니다.
 
@@ -30,6 +30,14 @@
 Pan/Zoom은 `Pointer Event → Editor Store(Viewport) → 렌더링`으로 끝나며 Firestore에 저장하지 않습니다.
 
 공간 그리기 중인 Vertex는 Editor Store의 임시 상태에 두고, Room을 닫을 때 Project Store에 확정합니다.
+
+Palette의 기본 항목은 책상·의자이며, 사용자가 추가한 물품의 이름·종류·기본 외형은 Project Store의 `paletteItemsById`와 프로젝트의 `paletteItemIds`에 둡니다. 선택한 항목과 배치 중 외형은 Editor Store에 두고, 미리보기는 화면에서 계산합니다. 클릭할 때 선택한 항목의 중심을 World 좌표에 맞춰 Project Store의 `objectsById`와 해당 층의 `objectIds`에 한 번 추가합니다. 배치된 오브젝트는 물품의 이름·종류·외형을 복사해 보관합니다.
+
+가구 스냅은 현재 층의 기존 오브젝트 중심을 기준으로 가로·세로 정렬을 계산합니다. 두 오브젝트의 중심 높이가 같고 서로 떨어져 있으면 양쪽 바깥으로 같은 빈 간격이 되는 후보를 추가합니다. 화면 픽셀 기준 허용 거리로 판정하고, 미리보기와 클릭 확정에 같은 함수를 사용합니다.
+
+각 가구는 프리셋의 기본 크기·색상·모양을 갖지만, 배치 설정으로 덮어쓸 수 있습니다. 확정한 오브젝트의 가로·세로 크기, 색상, 모양은 Project Store에 저장합니다. 선택·크기 조절 중 미리보기는 Editor Store에 두고 손잡이를 놓을 때 한 번 확정합니다. 도면 안 텍스트는 사용하지 않고 색상과 모양으로 구분하며, 이름은 Palette와 속성 패널에 표시합니다.
+
+물품 이동은 드래그 시작 시 Viewport를 보관하고, 화면 이동량(px)을 그 배율(px/m)로 나눠 World 이동량(m)으로 바꿉니다. 이동 중에는 Editor Store에서 미리 보이며 Pointer 종료 시 X·Y 미터 좌표만 Project Store에 기록합니다. 화면 Pan 오프셋은 이동량 계산에 영향을 주지 않습니다.
 
 완성된 Room의 Vertex를 드래그할 때도 Editor Store의 미리보기 좌표로 면적과 차이를 갱신합니다. 교차·겹침·짧은 벽·면적 0 검사를 통과한 좌표만 Pointer 종료 시 Project Store에 기록합니다. 벽 길이 입력은 벽의 시작점을 고정하고 끝점을 원래 방향으로 이동시킵니다.
 

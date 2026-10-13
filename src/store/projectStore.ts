@@ -1,11 +1,26 @@
 import { create } from 'zustand';
 import { validatePolygon } from '../domain/geometry/polygonValidation';
 import { splitPolygon } from '../domain/geometry/polygonSplit';
+import {
+  createDefaultPaletteItems,
+  isValidObjectAppearance,
+  layoutObjectFromPaletteItem,
+} from '../features/object/catalog';
+import { normalizeObjectRotation } from '../features/object/edit';
 import type { RoomEditError } from '../features/room/edit';
-import type { Floor, LayoutObject, Point, Project, Room } from '../types/layout';
+import type {
+  Floor,
+  LayoutObject,
+  ObjectAppearance,
+  PaletteItem,
+  Point,
+  Project,
+  Room,
+} from '../types/layout';
 
 export const LOCAL_PROJECT_ID = 'local-project';
 export const LOCAL_FLOOR_ID = 'local-floor-1';
+const defaultPaletteItems = createDefaultPaletteItems(LOCAL_PROJECT_ID);
 
 const initialProject: Project = {
   id: LOCAL_PROJECT_ID,
@@ -14,6 +29,7 @@ const initialProject: Project = {
   purpose: 'other',
   targetAreaSqm: null,
   floorIds: [LOCAL_FLOOR_ID],
+  paletteItemIds: defaultPaletteItems.map((item) => item.id),
   schemaVersion: 1,
   updatedAt: new Date().toISOString(),
 };
@@ -31,10 +47,31 @@ export interface ProjectState {
   floorsById: Record<string, Floor>;
   roomsById: Record<string, Room>;
   objectsById: Record<string, LayoutObject>;
+  paletteItemsById: Record<string, PaletteItem>;
   replaceProjectData: (
-    data: Pick<ProjectState, 'projectsById' | 'floorsById' | 'roomsById' | 'objectsById'>,
+    data: Pick<
+      ProjectState,
+      'projectsById' | 'floorsById' | 'roomsById' | 'objectsById' | 'paletteItemsById'
+    >,
   ) => void;
+  addPaletteItem: (
+    projectId: string,
+    input: Pick<PaletteItem, 'name' | 'category' | 'width' | 'height' | 'color' | 'shape'>,
+  ) => PaletteItem | null;
   createRoom: (floorId: string, vertices: Point[]) => boolean;
+  createLayoutObject: (
+    floorId: string,
+    paletteItemId: string,
+    center: Point,
+    appearance?: ObjectAppearance,
+  ) => boolean;
+  updateLayoutObject: (
+    objectId: string,
+    patch: Partial<
+      Pick<LayoutObject, 'x' | 'y' | 'width' | 'height' | 'color' | 'shape' | 'rotation'>
+    >,
+  ) => boolean;
+  deleteLayoutObject: (objectId: string) => boolean;
   splitRoom: (roomId: string, path: Point[]) => boolean;
   updateRoomVertices: (roomId: string, vertices: Point[]) => RoomEditError | null;
   setTargetAreaSqm: (projectId: string, targetAreaSqm: number | null) => void;
@@ -46,7 +83,43 @@ export const useProjectStore = create<ProjectState>((set) => ({
   floorsById: { [LOCAL_FLOOR_ID]: initialFloor },
   roomsById: {},
   objectsById: {},
+  paletteItemsById: Object.fromEntries(defaultPaletteItems.map((item) => [item.id, item])),
   replaceProjectData: (data) => set(data),
+  addPaletteItem: (projectId, input) => {
+    const name = input.name.trim();
+    if (
+      !name ||
+      name.length > 40 ||
+      !['furniture', 'electronics', 'facility', 'commercial'].includes(input.category) ||
+      !isValidObjectAppearance(input)
+    )
+      return null;
+    let created: PaletteItem | null = null;
+    set((state) => {
+      const project = state.projectsById[projectId];
+      if (!project) return state;
+      const item: PaletteItem = {
+        ...input,
+        id: crypto.randomUUID(),
+        projectId,
+        name,
+        builtIn: false,
+      };
+      created = item;
+      return {
+        projectsById: {
+          ...state.projectsById,
+          [projectId]: {
+            ...project,
+            paletteItemIds: [...project.paletteItemIds, item.id],
+            updatedAt: new Date().toISOString(),
+          },
+        },
+        paletteItemsById: { ...state.paletteItemsById, [item.id]: item },
+      };
+    });
+    return created;
+  },
   createRoom: (floorId, vertices) => {
     if (validatePolygon(vertices)) return false;
     let created = false;
@@ -75,6 +148,107 @@ export const useProjectStore = create<ProjectState>((set) => ({
       };
     });
     return created;
+  },
+  createLayoutObject: (floorId, paletteItemId, center, appearance) => {
+    if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) return false;
+    let created = false;
+    set((state) => {
+      const floor = state.floorsById[floorId];
+      const project = floor && state.projectsById[floor.projectId];
+      const item = state.paletteItemsById[paletteItemId];
+      if (!floor || !project || !item || item.projectId !== project.id) return state;
+      const selectedAppearance = appearance ?? item;
+      if (!isValidObjectAppearance(selectedAppearance)) return state;
+      const object = layoutObjectFromPaletteItem(
+        floorId,
+        item,
+        center,
+        crypto.randomUUID(),
+        selectedAppearance,
+      );
+      created = true;
+      return {
+        projectsById: {
+          ...state.projectsById,
+          [project.id]: { ...project, updatedAt: new Date().toISOString() },
+        },
+        floorsById: {
+          ...state.floorsById,
+          [floorId]: { ...floor, objectIds: [...floor.objectIds, object.id] },
+        },
+        objectsById: { ...state.objectsById, [object.id]: object },
+      };
+    });
+    return created;
+  },
+  updateLayoutObject: (objectId, patch) => {
+    let updated = false;
+    set((state) => {
+      const object = state.objectsById[objectId];
+      const floor = object && state.floorsById[object.floorId];
+      const project = floor && state.projectsById[floor.projectId];
+      if (!object || !project) return state;
+      const appearance = {
+        width: patch.width ?? object.width,
+        height: patch.height ?? object.height,
+        color: patch.color ?? object.color,
+        shape: patch.shape ?? object.shape,
+      };
+      const x = patch.x ?? object.x;
+      const y = patch.y ?? object.y;
+      const rotation = patch.rotation ?? object.rotation;
+      if (
+        !isValidObjectAppearance(appearance) ||
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(rotation)
+      )
+        return state;
+      const next = { ...object, ...appearance, x, y, rotation: normalizeObjectRotation(rotation) };
+      updated = true;
+      if (
+        next.x === object.x &&
+        next.y === object.y &&
+        next.width === object.width &&
+        next.height === object.height &&
+        next.color === object.color &&
+        next.shape === object.shape &&
+        next.rotation === object.rotation
+      )
+        return state;
+      return {
+        projectsById: {
+          ...state.projectsById,
+          [project.id]: { ...project, updatedAt: new Date().toISOString() },
+        },
+        objectsById: { ...state.objectsById, [objectId]: next },
+      };
+    });
+    return updated;
+  },
+  deleteLayoutObject: (objectId) => {
+    let deleted = false;
+    set((state) => {
+      const object = state.objectsById[objectId];
+      const floor = object && state.floorsById[object.floorId];
+      const project = floor && state.projectsById[floor.projectId];
+      if (!object || !floor || !project) return state;
+      const objectsById = { ...state.objectsById };
+      delete objectsById[objectId];
+      deleted = true;
+      return {
+        projectsById: {
+          ...state.projectsById,
+          [project.id]: { ...project, updatedAt: new Date().toISOString() },
+        },
+        floorsById: {
+          ...state.floorsById,
+          [floor.id]: { ...floor, objectIds: floor.objectIds.filter((id) => id !== objectId) },
+        },
+        objectsById,
+      };
+    });
+    return deleted;
   },
   splitRoom: (roomId, path) => {
     let divided = false;

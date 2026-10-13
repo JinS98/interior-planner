@@ -11,8 +11,15 @@ import { polygonArea } from '../domain/geometry/coordinates';
 import { resizeWall } from '../domain/geometry/polygonValidation';
 import { getWallSegments } from '../domain/geometry/walls';
 import { roomEditErrorMessage } from '../features/room/edit';
+import {
+  MAX_OBJECT_SIZE_METERS,
+  MIN_OBJECT_SIZE_METERS,
+  NEW_PALETTE_APPEARANCE,
+  OBJECT_SHAPES,
+} from '../features/object/catalog';
 import { useEditorStore, type EditorTool } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
+import type { LayoutObject, ObjectAppearance } from '../types/layout';
 import styles from './App.module.scss';
 
 const tools: {
@@ -24,6 +31,7 @@ const tools: {
 }[] = [
   { id: 'select', label: '선택', icon: '↖', description: '선택 도구', shortcut: 'V' },
   { id: 'room', label: '공간', icon: '▱', description: '점을 클릭해 벽 그리기', shortcut: 'R' },
+  { id: 'object', label: '물품', icon: '▣', description: '선택한 물품 배치', shortcut: 'F' },
   {
     id: 'divide',
     label: '분할',
@@ -33,6 +41,196 @@ const tools: {
   },
   { id: 'pan', label: '이동', icon: '✥', description: '도면 이동' },
 ];
+
+const COLOR_SWATCHES = ['#D5A56D', '#82A7DE', '#8494AD', '#E48A98', '#76BFA3', '#B996D8'];
+
+function ObjectSizeInput({
+  id,
+  label,
+  value,
+  onCommit,
+}: {
+  id: string;
+  label: string;
+  value: number;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <label className={styles.objectSizeField} htmlFor={id}>
+      {label}
+      <span>
+        <input
+          id={id}
+          type="number"
+          min={MIN_OBJECT_SIZE_METERS}
+          max={MAX_OBJECT_SIZE_METERS}
+          step="0.1"
+          inputMode="decimal"
+          value={draft ?? String(Number(value.toFixed(3)))}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => {
+            const next = Number(draft);
+            if (
+              draft !== null &&
+              draft !== '' &&
+              Number.isFinite(next) &&
+              next >= MIN_OBJECT_SIZE_METERS &&
+              next <= MAX_OBJECT_SIZE_METERS
+            )
+              onCommit(next);
+            setDraft(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+          }}
+        />
+        m
+      </span>
+    </label>
+  );
+}
+
+function ObjectCoordinateInput({
+  id,
+  label,
+  value,
+  onCommit,
+}: {
+  id: string;
+  label: string;
+  value: number;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <label className={styles.objectSizeField} htmlFor={id}>
+      {label}
+      <span>
+        <input
+          id={id}
+          type="number"
+          step="any"
+          inputMode="decimal"
+          value={draft ?? String(Number(value.toFixed(3)))}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => {
+            if (draft !== null && draft.trim() !== '') {
+              const next = Number(draft);
+              if (Number.isFinite(next)) onCommit(Number(next.toFixed(3)));
+            }
+            setDraft(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+            if (event.key === 'Escape') setDraft(null);
+          }}
+        />
+        m
+      </span>
+    </label>
+  );
+}
+
+function ObjectRotationInput({
+  rotation,
+  onCommit,
+}: {
+  rotation: number;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <label className={styles.objectRotationField} htmlFor="selected-object-rotation">
+      회전
+      <span>
+        <input
+          id="selected-object-rotation"
+          type="number"
+          min={0}
+          max={359}
+          step={1}
+          value={draft ?? String(Math.round(rotation))}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => {
+            if (draft !== null && draft !== '' && Number.isFinite(Number(draft)))
+              onCommit(Number(draft));
+            setDraft(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+          }}
+        />
+        °
+      </span>
+    </label>
+  );
+}
+
+function ObjectAppearanceControls({
+  appearance,
+  idPrefix,
+  onChange,
+}: {
+  appearance: ObjectAppearance;
+  idPrefix: string;
+  onChange: (patch: Partial<ObjectAppearance>) => void;
+}) {
+  return (
+    <div className={styles.objectAppearance}>
+      <div className={styles.objectSizeRow}>
+        <ObjectSizeInput
+          id={`${idPrefix}-width`}
+          label="가로"
+          value={appearance.width}
+          onCommit={(width) => onChange({ width })}
+        />
+        <ObjectSizeInput
+          id={`${idPrefix}-height`}
+          label="세로"
+          value={appearance.height}
+          onCommit={(height) => onChange({ height })}
+        />
+      </div>
+      <span className={styles.objectFieldLabel}>모양</span>
+      <div className={styles.objectShapeOptions} role="group" aria-label="가구 모양">
+        {OBJECT_SHAPES.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={appearance.shape === id}
+            onClick={() => onChange({ shape: id })}
+          >
+            <span aria-hidden="true">{id === 'rectangle' ? '▭' : id === 'circle' ? '●' : '▲'}</span>
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className={styles.objectFieldLabel}>색상</span>
+      <div className={styles.objectColorOptions} role="group" aria-label="가구 색상">
+        {COLOR_SWATCHES.map((color) => (
+          <button
+            key={color}
+            type="button"
+            aria-label={`색상 ${color}`}
+            aria-pressed={appearance.color.toLowerCase() === color.toLowerCase()}
+            className={styles.objectColorSwatch}
+            style={{ backgroundColor: color }}
+            onClick={() => onChange({ color })}
+          />
+        ))}
+        <label className={styles.customColor}>
+          <input
+            type="color"
+            aria-label="사용자 지정 색상"
+            value={appearance.color}
+            onChange={(event) => onChange({ color: event.target.value })}
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
 
 function TargetAreaInput({
   areaUnit,
@@ -130,8 +328,21 @@ function WallLengthInput({
 
 export function App() {
   const [areaUnit, setAreaUnit] = useState<AreaUnit>('sqm');
+  const [addingPaletteItem, setAddingPaletteItem] = useState(false);
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemCategory, setNewItemCategory] = useState<LayoutObject['category']>('furniture');
+  const [newItemAppearance, setNewItemAppearance] =
+    useState<ObjectAppearance>(NEW_PALETTE_APPEARANCE);
   const tool = useEditorStore((state) => state.tool);
   const setTool = useEditorStore((state) => state.setTool);
+  const selectedPaletteItemId = useEditorStore((state) => state.selectedPaletteItemId);
+  const setPaletteItem = useEditorStore((state) => state.setPaletteItem);
+  const clearPaletteItem = useEditorStore((state) => state.clearPaletteItem);
+  const objectPlacement = useEditorStore((state) => state.objectPlacement);
+  const setObjectPlacement = useEditorStore((state) => state.setObjectPlacement);
+  const selectedObjectId = useEditorStore((state) => state.selectedObjectIds[0] ?? null);
+  const selectObject = useEditorStore((state) => state.selectObject);
+  const objectEditPreview = useEditorStore((state) => state.objectEditPreview);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey)
@@ -163,10 +374,20 @@ export function App() {
   const selectWall = useEditorStore((state) => state.selectWall);
   const setGeometryError = useEditorStore((state) => state.setGeometryError);
   const project = useProjectStore((state) => state.projectsById[activeProjectId ?? '']);
+  const paletteItemsById = useProjectStore((state) => state.paletteItemsById);
+  const addPaletteItem = useProjectStore((state) => state.addPaletteItem);
   const setTargetAreaSqm = useProjectStore((state) => state.setTargetAreaSqm);
   const updateRoomVertices = useProjectStore((state) => state.updateRoomVertices);
+  const updateLayoutObject = useProjectStore((state) => state.updateLayoutObject);
+  const deleteLayoutObject = useProjectStore((state) => state.deleteLayoutObject);
   const floor = useProjectStore((state) => state.floorsById[activeFloorId ?? '']);
   const roomsById = useProjectStore((state) => state.roomsById);
+  const objectsById = useProjectStore((state) => state.objectsById);
+  const selectedObject = selectedObjectId
+    ? objectEditPreview?.id === selectedObjectId
+      ? objectEditPreview
+      : objectsById[selectedObjectId]
+    : null;
   const rooms = (floor?.roomIds ?? [])
     .map((id) => roomsById[id])
     .filter((room) => room != null)
@@ -259,8 +480,186 @@ export function App() {
           </div>
           <div className={styles.infoRow}>
             <span>오브젝트</span>
-            <strong>0개</strong>
+            <strong>{floor?.objectIds.length ?? 0}개</strong>
           </div>
+          <section
+            className={styles.objectPalette}
+            aria-label="가구와 물품 팔레트"
+            onContextMenu={(event) => {
+              if (tool !== 'object') return;
+              if (
+                event.target instanceof HTMLElement &&
+                event.target.closest('input, textarea, select')
+              )
+                return;
+              event.preventDefault();
+              clearPaletteItem();
+            }}
+          >
+            <h3>가구·물품 Palette</h3>
+            <p>항목을 선택한 뒤 도면을 클릭해 배치하세요.</p>
+            <div className={styles.presetList}>
+              {(project?.paletteItemIds ?? [])
+                .map((id) => paletteItemsById[id])
+                .filter((item) => item != null)
+                .map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={styles.presetButton}
+                    aria-pressed={tool === 'object' && selectedPaletteItemId === item.id}
+                    onClick={() => setPaletteItem(item)}
+                  >
+                    <span
+                      className={styles.presetIcon}
+                      style={{ color: item.color, backgroundColor: `${item.color}26` }}
+                      aria-hidden="true"
+                    >
+                      {item.shape === 'rectangle' ? '▭' : item.shape === 'circle' ? '●' : '▲'}
+                    </span>
+                    <span className={styles.presetName}>{item.name}</span>
+                    <span className={styles.presetSize}>
+                      {item.width} × {item.height}m
+                    </span>
+                  </button>
+                ))}
+            </div>
+            {addingPaletteItem ? (
+              <form
+                className={styles.paletteCreateForm}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!project) return;
+                  const item = addPaletteItem(project.id, {
+                    name: newItemName,
+                    category: newItemCategory,
+                    ...newItemAppearance,
+                  });
+                  if (!item) return;
+                  setPaletteItem(item);
+                  setAddingPaletteItem(false);
+                  setNewItemName('');
+                  setNewItemCategory('furniture');
+                  setNewItemAppearance(NEW_PALETTE_APPEARANCE);
+                }}
+              >
+                <h4>물품 추가</h4>
+                <label className={styles.paletteCreateField}>
+                  이름
+                  <input
+                    required
+                    maxLength={40}
+                    value={newItemName}
+                    onChange={(event) => setNewItemName(event.target.value)}
+                    placeholder="예: 소파, 모니터"
+                  />
+                </label>
+                <label className={styles.paletteCreateField}>
+                  종류
+                  <select
+                    value={newItemCategory}
+                    onChange={(event) =>
+                      setNewItemCategory(event.target.value as LayoutObject['category'])
+                    }
+                  >
+                    <option value="furniture">가구</option>
+                    <option value="electronics">전자기기</option>
+                    <option value="facility">기타 물품</option>
+                    <option value="commercial">상업용 물품</option>
+                  </select>
+                </label>
+                <ObjectAppearanceControls
+                  appearance={newItemAppearance}
+                  idPrefix="new-palette-item"
+                  onChange={(patch) =>
+                    setNewItemAppearance((current) => ({ ...current, ...patch }))
+                  }
+                />
+                <div className={styles.paletteCreateActions}>
+                  <button type="button" onClick={() => setAddingPaletteItem(false)}>
+                    취소
+                  </button>
+                  <button type="submit" disabled={!newItemName.trim()}>
+                    추가하기
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button
+                type="button"
+                className={styles.paletteAddButton}
+                onClick={() => setAddingPaletteItem(true)}
+              >
+                + 물품 추가
+              </button>
+            )}
+            {tool === 'object' && selectedPaletteItemId === null && (
+              <p className={styles.paletteEmptySelection} role="status">
+                선택된 물품이 없습니다. 물품을 고르거나 추가해 주세요.
+              </p>
+            )}
+            {tool === 'object' && selectedPaletteItemId !== null && (
+              <div className={styles.paletteSettings}>
+                <h4>배치 설정</h4>
+                <ObjectAppearanceControls
+                  appearance={objectPlacement}
+                  idPrefix="placement"
+                  onChange={setObjectPlacement}
+                />
+              </div>
+            )}
+          </section>
+          {tool === 'select' && selectedObject && (
+            <section
+              className={styles.objectEditSection}
+              aria-label={`${selectedObject.name} 편집`}
+            >
+              <h3>{selectedObject.name} 편집</h3>
+              <p>
+                물품을 드래그해 이동하고, 위쪽 손잡이로 회전하거나 오른쪽 아래 손잡이로 크기를
+                바꾸세요.
+              </p>
+              <div className={styles.objectPositionControls}>
+                <span className={styles.objectFieldLabel}>
+                  위치 (도면 원점 기준, 회전 전 왼쪽 위)
+                </span>
+                <div className={styles.objectSizeRow} key={`${selectedObject.id}-position`}>
+                  <ObjectCoordinateInput
+                    id="selected-object-x"
+                    label="X 좌표"
+                    value={selectedObject.x}
+                    onCommit={(x) => updateLayoutObject(selectedObject.id, { x })}
+                  />
+                  <ObjectCoordinateInput
+                    id="selected-object-y"
+                    label="Y 좌표"
+                    value={selectedObject.y}
+                    onCommit={(y) => updateLayoutObject(selectedObject.id, { y })}
+                  />
+                </div>
+              </div>
+              <ObjectAppearanceControls
+                key={selectedObject.id}
+                appearance={selectedObject}
+                idPrefix="selected-object"
+                onChange={(patch) => updateLayoutObject(selectedObject.id, patch)}
+              />
+              <ObjectRotationInput
+                key={`${selectedObject.id}-rotation`}
+                rotation={selectedObject.rotation}
+                onCommit={(rotation) => updateLayoutObject(selectedObject.id, { rotation })}
+              />
+              <button
+                type="button"
+                className={styles.objectDeleteButton}
+                onClick={() => {
+                  if (deleteLayoutObject(selectedObject.id)) selectObject(null);
+                }}
+              >
+                물품 삭제
+              </button>
+            </section>
+          )}
           <section className={styles.areaSection} aria-label="공간 면적">
             <div className={styles.areaTotal}>
               <span>공간 면적 합계</span>
@@ -344,8 +743,8 @@ export function App() {
             </section>
           )}
           <div className={styles.notice}>
-            공간 도구로 방을 만든 뒤 분할 도구로 첫 벽, 필요한 내부 꺾임점, 마지막 벽을 차례로
-            클릭하세요. 선택 도구로 방을 옮기거나 점과 벽을 수정할 수 있습니다.
+            공간을 그리고 분할하거나, Palette에서 물품의 크기·모양·색을 정해 배치하세요. 선택 도구로
+            놓인 물품을 수정할 수 있습니다.
           </div>
           <div className={styles.shortcuts}>
             <p>빠른 조작</p>
@@ -357,6 +756,9 @@ export function App() {
             </span>
             <span>
               공간 도구 <kbd>R</kbd>
+            </span>
+            <span>
+              물품 배치 <kbd>F</kbd>
             </span>
             <span>
               분할 도구 <kbd>D</kbd>
