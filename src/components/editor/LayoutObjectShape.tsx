@@ -17,7 +17,7 @@ export function LayoutObjectShape({
 
   return (
     <g
-      className={`${styles.layoutObject} ${preview ? styles.objectPreview : ''}`}
+      className={`${styles.layoutObject} ${preview ? styles.objectPreview : ''} ${object.locked ? styles.lockedObject : ''}`}
       transform={`translate(${origin.x} ${origin.y}) rotate(${object.rotation} ${width / 2} ${height / 2})`}
       style={{ color: object.color }}
       data-type={object.type}

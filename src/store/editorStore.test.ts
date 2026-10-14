@@ -108,3 +108,21 @@ describe('selecting a furniture preset', () => {
     store.setTool('select');
   });
 });
+
+describe('multi selection', () => {
+  it('adds and removes IDs without duplicates while clearing room selection', () => {
+    const store = useEditorStore.getState();
+    store.selectRoom('room-1');
+    store.selectObjects(['desk-1', 'chair-1', 'desk-1']);
+    expect(useEditorStore.getState()).toMatchObject({
+      selectedObjectIds: ['desk-1', 'chair-1'],
+      selectedRoomId: null,
+    });
+    store.toggleObjectSelection('chair-1');
+    expect(useEditorStore.getState().selectedObjectIds).toEqual(['desk-1']);
+    store.toggleObjectSelection('chair-1');
+    expect(useEditorStore.getState().selectedObjectIds).toEqual(['desk-1', 'chair-1']);
+    store.selectObjects([]);
+    expect(useEditorStore.getState().selectedObjectIds).toEqual([]);
+  });
+});

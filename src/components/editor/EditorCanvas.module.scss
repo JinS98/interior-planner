@@ -51,6 +51,9 @@
 .objectRotateCursor {
   cursor: crosshair;
 }
+.marqueeSelecting {
+  cursor: crosshair;
+}
 .snapReady {
   cursor: none;
 }
@@ -158,6 +161,10 @@
       stroke-width: 2;
     }
   }
+  .lockedObject .objectBody {
+    stroke: #6c7482;
+    stroke-dasharray: 4 3;
+  }
   .objectPreview {
     opacity: 0.6;
     .objectBody {
@@ -169,6 +176,9 @@
     stroke: #314dbf;
     stroke-width: 2;
     stroke-dasharray: 6 4;
+  }
+  .lockedSelectionBounds {
+    stroke: #6c7482;
   }
   .objectResizeHandle {
     fill: #fff;
@@ -183,6 +193,20 @@
     fill: #fff;
     stroke: #314dbf;
     stroke-width: 2;
+  }
+  .marqueeSelection {
+    fill: rgb(82 111 225 / 14%);
+    stroke: #526fe1;
+    stroke-width: 1.5;
+    stroke-dasharray: 6 4;
+  }
+  .objectMoveGuide {
+    stroke: #16845e;
+    stroke-width: 1.5;
+    stroke-dasharray: 6 4;
+    &[data-kind='grid'] {
+      stroke: #526fe1;
+    }
   }
   .objectSnapGuide {
     line {

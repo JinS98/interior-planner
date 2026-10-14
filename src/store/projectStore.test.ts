@@ -300,6 +300,77 @@ describe('editing and deleting a placed object', () => {
   });
 });
 
+describe('moveLayoutObjects', () => {
+  it('moves selected objects together and rejects a partial move', () => {
+    const store = useProjectStore.getState();
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 10, y: 10 })).toBe(true);
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'chair', { x: 12, y: 10 })).toBe(true);
+    const ids = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds.slice(-2);
+    const before = ids.map((id) => useProjectStore.getState().objectsById[id]);
+    expect(store.moveLayoutObjects(ids, { x: 1.5, y: -0.25 })).toBe(true);
+    const after = ids.map((id) => useProjectStore.getState().objectsById[id]);
+    expect(after[0].x).toBeCloseTo(before[0].x + 1.5);
+    expect(after[1].x).toBeCloseTo(before[1].x + 1.5);
+    expect(after[0].y).toBeCloseTo(before[0].y - 0.25);
+    expect(after[1].x - after[0].x).toBeCloseTo(before[1].x - before[0].x);
+    expect(store.moveLayoutObjects([ids[0], 'missing-object'], { x: 2, y: 0 })).toBe(false);
+    expect(store.moveLayoutObjects(ids, { x: Number.NaN, y: 0 })).toBe(false);
+    expect(useProjectStore.getState().objectsById[ids[0]].x).toBe(after[0].x);
+    expect(useProjectStore.getState().objectsById[ids[1]].x).toBe(after[1].x);
+    expect(store.moveLayoutObjects(ids, { x: Number.MAX_VALUE, y: 0 })).toBe(true);
+    expect(store.moveLayoutObjects(ids, { x: Number.MAX_VALUE, y: 0 })).toBe(false);
+    expect(useProjectStore.getState().objectsById[ids[0]].x).toBe(Number.MAX_VALUE);
+    expect(useProjectStore.getState().objectsById[ids[1]].x).toBe(Number.MAX_VALUE);
+  });
+});
+
+describe('locked layout objects and batch commands', () => {
+  it('blocks editing a locked object and removes only unlocked objects from a mixed selection', () => {
+    const store = useProjectStore.getState();
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 20, y: 20 })).toBe(true);
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'chair', { x: 22, y: 20 })).toBe(true);
+    const [lockedId, freeId] = useProjectStore
+      .getState()
+      .floorsById[LOCAL_FLOOR_ID].objectIds.slice(-2);
+    const before = useProjectStore.getState().objectsById[lockedId];
+    expect(store.setLayoutObjectsLocked([lockedId], true)).toBe(true);
+    expect(store.updateLayoutObject(lockedId, { x: 100 })).toBe(false);
+    expect(store.moveLayoutObjects([lockedId], { x: 1, y: 1 })).toBe(false);
+    expect(store.deleteLayoutObject(lockedId)).toBe(false);
+    expect(store.deleteLayoutObjects([lockedId, freeId])).toEqual([freeId]);
+    expect(useProjectStore.getState().objectsById[lockedId]).toMatchObject({
+      x: before.x,
+      y: before.y,
+      locked: true,
+    });
+    expect(useProjectStore.getState().objectsById[freeId]).toBeUndefined();
+    expect(store.setLayoutObjectsLocked([lockedId], false)).toBe(true);
+    expect(store.updateLayoutObject(lockedId, { x: 21 })).toBe(true);
+  });
+
+  it('duplicates a copied snapshot with new IDs, preserved appearance, and unlocked state', () => {
+    const store = useProjectStore.getState();
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 30, y: 30 })).toBe(true);
+    const sourceId = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds.at(-1)!;
+    expect(store.updateLayoutObject(sourceId, { color: '#123456', rotation: 45 })).toBe(true);
+    expect(store.setLayoutObjectsLocked([sourceId], true)).toBe(true);
+    const source = useProjectStore.getState().objectsById[sourceId];
+    const [copyId] = store.duplicateLayoutObjects(LOCAL_FLOOR_ID, [source], { x: 0.25, y: 0.25 });
+    expect(copyId).not.toBe(sourceId);
+    expect(useProjectStore.getState().objectsById[copyId]).toMatchObject({
+      x: source.x + 0.25,
+      y: source.y + 0.25,
+      width: source.width,
+      color: '#123456',
+      rotation: 45,
+      locked: false,
+    });
+    expect(store.duplicateLayoutObjects(LOCAL_FLOOR_ID, [source], { x: Infinity, y: 0 })).toEqual(
+      [],
+    );
+  });
+});
+
 describe('setTargetAreaSqm', () => {
   it('stores a positive square-meter target and clears it when requested', () => {
     const store = useProjectStore.getState();

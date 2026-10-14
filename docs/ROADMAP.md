@@ -59,10 +59,10 @@
 
 ## 5일차 — 편집 UX·History (원안 5)
 
-- [ ] 다중 선택, 영역 선택, Grid/Object Snap
-- [ ] 복사·붙여넣기, Delete/Escape, 잠금
-- [ ] 하나의 편집 제스처를 하나의 Command로 기록해 Undo/Redo
-- [ ] Undo 후 새 편집 시 Redo 분기 제거, 키보드 단축키 정리
+- [x] 다중 선택, 영역 선택, Grid/Object Snap
+- [x] 복사·붙여넣기, Delete/Escape, 잠금
+- [x] 하나의 편집 제스처를 하나의 Command로 기록해 Undo/Redo
+- [x] Undo 후 새 편집 시 Redo 분기 제거, 키보드 단축키 정리
 
 완료 기준: 반복 편집이 가능하며 되돌리기/다시 실행 결과가 안정적.
 

@@ -24,16 +24,25 @@ import { hitTestRoom } from '../../features/room/hitTest';
 import { snapRoomPoint } from '../../features/room/snap';
 import { layoutObjectFromPaletteItem } from '../../features/object/catalog';
 import {
-  resizeObjectFromScreenDrag,
-  rotateObjectFromScreenDrag,
-  translateObjectFromScreenDrag,
-} from '../../features/object/edit';
+  copySelectedObjects,
+  deleteSelectedObjects,
+  pasteCopiedObjects,
+} from '../../features/object/clipboard';
+import { resizeObjectFromScreenDrag, rotateObjectFromScreenDrag } from '../../features/object/edit';
 import {
   hitTestLayoutObject,
   isNearObjectResizeHandle,
   isNearObjectRotationHandle,
 } from '../../features/object/hitTest';
 import { snapObjectPlacement } from '../../features/object/snap';
+import { snapObjectMove, type ObjectMoveSnap } from '../../features/object/moveSnap';
+import { objectsInSelectionRect, selectionRectBetween } from '../../features/object/selection';
+import { redoEditorCommand, undoEditorCommand } from '../../features/history/actions';
+import {
+  isSpaceActivationTarget,
+  isTypingTarget,
+  resolveEditorShortcut,
+} from '../../features/editor/shortcuts';
 import { useEditorStore } from '../../store/editorStore';
 import { useProjectStore } from '../../store/projectStore';
 import type { LayoutObject, Point, Room, Viewport } from '../../types/layout';
@@ -87,43 +96,23 @@ function RoomAreaLabel({
   );
 }
 
-function useSpaceKey() {
-  const [pressed, setPressed] = useState(false);
-  useEffect(() => {
-    const down = (event: KeyboardEvent) => {
-      if (event.code !== 'Space' || event.repeat) return;
-      if (event.target instanceof HTMLElement && /INPUT|TEXTAREA|SELECT/.test(event.target.tagName))
-        return;
-      event.preventDefault();
-      setPressed(true);
-    };
-    const up = (event: KeyboardEvent) => {
-      if (event.code === 'Space') setPressed(false);
-    };
-    const blur = () => setPressed(false);
-    window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
-    window.addEventListener('blur', blur);
-    return () => {
-      window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
-      window.removeEventListener('blur', blur);
-    };
-  }, []);
-  return pressed;
-}
-
 export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const viewport = useEditorStore((state) => state.viewport);
   const setViewport = useEditorStore((state) => state.setViewport);
   const tool = useEditorStore((state) => state.tool);
+  const setTool = useEditorStore((state) => state.setTool);
   const selectedPaletteItemId = useEditorStore((state) => state.selectedPaletteItemId);
   const clearPaletteItem = useEditorStore((state) => state.clearPaletteItem);
   const objectPlacement = useEditorStore((state) => state.objectPlacement);
-  const selectedObjectId = useEditorStore((state) => state.selectedObjectIds[0] ?? null);
+  const selectedObjectIds = useEditorStore((state) => state.selectedObjectIds);
+  const selectedObjectId = selectedObjectIds.length === 1 ? selectedObjectIds[0] : null;
   const objectEditPreview = useEditorStore((state) => state.objectEditPreview);
+  const objectMovePreviewById = useEditorStore((state) => state.objectMovePreviewById);
   const selectObject = useEditorStore((state) => state.selectObject);
+  const selectObjects = useEditorStore((state) => state.selectObjects);
+  const toggleObjectSelection = useEditorStore((state) => state.toggleObjectSelection);
   const setObjectEditPreview = useEditorStore((state) => state.setObjectEditPreview);
+  const setObjectMovePreview = useEditorStore((state) => state.setObjectMovePreview);
   const roomDraftVertices = useEditorStore((state) => state.roomDraftVertices);
   const divisionDraft = useEditorStore((state) => state.divisionDraft);
   const addRoomDraftVertex = useEditorStore((state) => state.addRoomDraftVertex);
@@ -149,10 +138,10 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const createRoom = useProjectStore((state) => state.createRoom);
   const createLayoutObject = useProjectStore((state) => state.createLayoutObject);
   const updateLayoutObject = useProjectStore((state) => state.updateLayoutObject);
-  const deleteLayoutObject = useProjectStore((state) => state.deleteLayoutObject);
+  const moveLayoutObjects = useProjectStore((state) => state.moveLayoutObjects);
   const splitRoom = useProjectStore((state) => state.splitRoom);
   const updateRoomVertices = useProjectStore((state) => state.updateRoomVertices);
-  const spacePressed = useSpaceKey();
+  const [spacePressed, setSpacePressed] = useState(false);
   const drag = useRef<{ pointerId: number; point: Point; viewport: Viewport } | null>(null);
   const roomClick = useRef<{ pointerId: number; point: Point } | null>(null);
   const vertexDrag = useRef<{
@@ -177,8 +166,17 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const objectMove = useRef<{
     pointerId: number;
     startPoint: Point;
-    original: LayoutObject;
+    originals: LayoutObject[];
+    stationary: LayoutObject[];
+    primaryId: string;
     viewport: Viewport;
+  } | null>(null);
+  const marquee = useRef<{
+    pointerId: number;
+    start: Point;
+    current: Point;
+    additive: boolean;
+    baseIds: string[];
   } | null>(null);
   const objectRotate = useRef<{
     pointerId: number;
@@ -192,6 +190,8 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const [movingRoom, setMovingRoom] = useState(false);
   const [resizingObject, setResizingObject] = useState(false);
   const [movingObject, setMovingObject] = useState(false);
+  const [marqueeRect, setMarqueeRect] = useState<{ start: Point; current: Point } | null>(null);
+  const [moveSnap, setMoveSnap] = useState<ObjectMoveSnap | null>(null);
   const [rotatingObject, setRotatingObject] = useState(false);
   const [hoveredObject, setHoveredObject] = useState(false);
   const [hoveredObjectHandle, setHoveredObjectHandle] = useState(false);
@@ -203,8 +203,10 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const objects = (floor?.objectIds ?? [])
     .map((id) => objectsById[id])
     .filter((object) => object != null);
-  const displayedObjects = objects.map((object) =>
-    objectEditPreview?.id === object.id ? objectEditPreview : object,
+  const displayedObjects = objects.map(
+    (object) =>
+      objectMovePreviewById?.[object.id] ??
+      (objectEditPreview?.id === object.id ? objectEditPreview : object),
   );
   const selectedObject = displayedObjects.find((object) => object.id === selectedObjectId);
   const selectedObjectOrigin = selectedObject
@@ -218,6 +220,9 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
         },
         viewport,
       )
+    : null;
+  const marqueeBounds = marqueeRect
+    ? selectionRectBetween(marqueeRect.start, marqueeRect.current)
     : null;
   const displayedRooms = rooms.map((room) =>
     roomEditPreview?.roomId === room.id ? { ...room, vertices: roomEditPreview.vertices } : room,
@@ -344,6 +349,19 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     setViewport({ scale, x: point.x - offset.x, y: point.y - offset.y });
   }
 
+  function beginMarquee(event: PointerEvent<HTMLDivElement>, start: Point, additive: boolean) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    marquee.current = {
+      pointerId: event.pointerId,
+      start,
+      current: start,
+      additive,
+      baseIds: additive ? selectedObjectIds : [],
+    };
+    setMarqueeRect({ start, current: start });
+    if (additive) selectObjects(selectedObjectIds);
+  }
+
   function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
     const panGesture =
       event.button === 1 || (event.button === 0 && (spacePressed || tool === 'pan'));
@@ -362,7 +380,9 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     } else if (tool === 'select') {
       const point = localPoint(event);
       if (
+        !event.shiftKey &&
         selectedObject &&
+        !selectedObject.locked &&
         isNearObjectRotationHandle(
           selectedObject,
           point,
@@ -380,7 +400,9 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
         return;
       }
       if (
+        !event.shiftKey &&
         selectedObject &&
+        !selectedObject.locked &&
         isNearObjectResizeHandle(
           selectedObject,
           point,
@@ -399,21 +421,37 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       }
       const objectHit = hitTestLayoutObject(objects, point, viewport);
       if (objectHit) {
-        selectObject(objectHit.id);
+        if (event.shiftKey) {
+          toggleObjectSelection(objectHit.id);
+          return;
+        }
+        const moveIds = selectedObjectIds.includes(objectHit.id)
+          ? selectedObjectIds
+          : [objectHit.id];
+        if (!selectedObjectIds.includes(objectHit.id)) selectObject(objectHit.id);
+        if (objectHit.locked) return;
         event.currentTarget.setPointerCapture(event.pointerId);
+        const selectedIds = new Set(moveIds);
         objectMove.current = {
           pointerId: event.pointerId,
           startPoint: point,
-          original: objectHit,
+          originals: objects.filter((object) => selectedIds.has(object.id) && !object.locked),
+          stationary: objects.filter((object) => !selectedIds.has(object.id) || object.locked),
+          primaryId: objectHit.id,
           viewport,
         };
         setMovingObject(true);
+        return;
+      }
+      if (event.shiftKey) {
+        beginMarquee(event, point, true);
         return;
       }
       selectObject(null);
       const hit = hitTestRoom(rooms, point, viewport, event.pointerType === 'touch' ? 18 : 10);
       if (!hit) {
         selectRoom(null);
+        beginMarquee(event, point, false);
         return;
       }
       if (hit.kind === 'wall') selectWall(hit.roomId, hit.index);
@@ -454,6 +492,7 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     const currentObjectResize = objectResize.current;
     const currentObjectMove = objectMove.current;
     const currentObjectRotate = objectRotate.current;
+    const currentMarquee = marquee.current;
     if (currentObjectResize?.pointerId === event.pointerId) {
       setObjectEditPreview(
         resizeObjectFromScreenDrag(
@@ -478,15 +517,34 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
           point.x - currentObjectMove.startPoint.x,
           point.y - currentObjectMove.startPoint.y,
         ) > 4
-      )
-        setObjectEditPreview(
-          translateObjectFromScreenDrag(
-            currentObjectMove.original,
-            currentObjectMove.startPoint,
-            point,
-            currentObjectMove.viewport,
+      ) {
+        const rawDelta = {
+          x: (point.x - currentObjectMove.startPoint.x) / currentObjectMove.viewport.scale,
+          y: (point.y - currentObjectMove.startPoint.y) / currentObjectMove.viewport.scale,
+        };
+        const snapped = snapObjectMove(
+          currentObjectMove.originals,
+          currentObjectMove.primaryId,
+          currentObjectMove.stationary,
+          rawDelta,
+          currentObjectMove.viewport,
+        );
+        setObjectMovePreview(
+          Object.fromEntries(
+            currentObjectMove.originals.map((object) => [
+              object.id,
+              { ...object, x: object.x + snapped.delta.x, y: object.y + snapped.delta.y },
+            ]),
           ),
         );
+        setMoveSnap(snapped);
+      } else {
+        setObjectMovePreview(null);
+        setMoveSnap(null);
+      }
+    } else if (currentMarquee?.pointerId === event.pointerId) {
+      currentMarquee.current = point;
+      setMarqueeRect({ start: currentMarquee.start, current: point });
     } else if (currentVertexDrag?.pointerId === event.pointerId) {
       const nextPoint =
         snapScreenPointToGrid(point, viewport)?.world ?? screenToWorld(point, viewport);
@@ -525,15 +583,17 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       const nearHandle =
         tool === 'select' &&
         selectedObject !== undefined &&
+        !selectedObject.locked &&
         isNearObjectResizeHandle(selectedObject, point, viewport);
       const nearRotateHandle =
         tool === 'select' &&
         selectedObject !== undefined &&
+        !selectedObject.locked &&
         isNearObjectRotationHandle(selectedObject, point, viewport);
       const objectHit = tool === 'select' ? hitTestLayoutObject(objects, point, viewport) : null;
       setHoveredObjectHandle(nearHandle);
       setHoveredObjectRotateHandle(nearRotateHandle);
-      setHoveredObject(objectHit !== null);
+      setHoveredObject(objectHit !== null && !objectHit.locked);
       const hoveredHit =
         tool === 'select' && !objectHit && !nearHandle && !nearRotateHandle
           ? hitTestRoom(rooms, point, viewport)
@@ -544,6 +604,21 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   }
 
   function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (marquee.current?.pointerId === event.pointerId) {
+      const selection = marquee.current;
+      marquee.current = null;
+      setMarqueeRect(null);
+      const point = localPoint(event);
+      if (Math.hypot(point.x - selection.start.x, point.y - selection.start.y) > 4) {
+        const ids = objectsInSelectionRect(
+          objects,
+          selectionRectBetween(selection.start, point),
+          viewport,
+        );
+        selectObjects(selection.additive ? [...selection.baseIds, ...ids] : ids);
+      }
+      return;
+    }
     if (objectResize.current?.pointerId === event.pointerId) {
       const edit = objectResize.current;
       objectResize.current = null;
@@ -581,16 +656,24 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       const edit = objectMove.current;
       objectMove.current = null;
       setMovingObject(false);
-      setObjectEditPreview(null);
+      setObjectMovePreview(null);
+      setMoveSnap(null);
       const point = localPoint(event);
       if (Math.hypot(point.x - edit.startPoint.x, point.y - edit.startPoint.y) > 4) {
-        const candidate = translateObjectFromScreenDrag(
-          edit.original,
-          edit.startPoint,
-          point,
+        const snapped = snapObjectMove(
+          edit.originals,
+          edit.primaryId,
+          edit.stationary,
+          {
+            x: (point.x - edit.startPoint.x) / edit.viewport.scale,
+            y: (point.y - edit.startPoint.y) / edit.viewport.scale,
+          },
           edit.viewport,
         );
-        updateLayoutObject(edit.original.id, { x: candidate.x, y: candidate.y });
+        moveLayoutObjects(
+          edit.originals.map((object) => object.id),
+          snapped.delta,
+        );
       }
       return;
     }
@@ -734,9 +817,11 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     setRoomError(null);
   }
 
-  function finishInteraction() {
+  const finishInteraction = useCallback(() => {
     drag.current = null;
     roomClick.current = null;
+    marquee.current = null;
+    setMarqueeRect(null);
     if (vertexDrag.current) {
       vertexDrag.current = null;
       setRoomEditPreview(null);
@@ -754,7 +839,8 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     }
     if (objectMove.current) {
       objectMove.current = null;
-      setObjectEditPreview(null);
+      setObjectMovePreview(null);
+      setMoveSnap(null);
       setMovingObject(false);
     }
     if (objectRotate.current) {
@@ -763,7 +849,7 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       setRotatingObject(false);
     }
     setDragging(false);
-  }
+  }, [setRoomEditPreview, setObjectEditPreview, setObjectMovePreview]);
 
   const undoRoomDraftClick = useCallback(() => {
     roomClick.current = null;
@@ -780,102 +866,114 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   }, [undoDivisionDraftPoint]);
 
   useEffect(() => {
-    if (
-      (tool !== 'room' || roomDraftVertices.length === 0) &&
-      (tool !== 'divide' || !divisionDraft) &&
-      !movingVertex &&
-      !movingRoom &&
-      !resizingObject &&
-      !movingObject &&
-      !rotatingObject
-    )
-      return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' && event.key !== 'Backspace') return;
-      if (
-        event.target instanceof HTMLElement &&
-        (event.target.isContentEditable ||
-          event.target.closest('input, textarea, select, [contenteditable="true"]'))
-      )
+      if (event.defaultPrevented || isTypingTarget(event.target)) return;
+      const action = resolveEditorShortcut(event);
+      if (!action) return;
+      if (action === 'pan') {
+        if (isSpaceActivationTarget(event.target)) return;
+        event.preventDefault();
+        setSpacePressed(true);
         return;
-      if (event.key === 'Backspace' && (tool !== 'divide' || !divisionDraft)) return;
-      event.preventDefault();
-      if (
-        event.key === 'Escape' &&
-        (vertexDrag.current ||
-          roomDrag.current ||
-          objectResize.current ||
-          objectMove.current ||
-          objectRotate.current)
-      ) {
-        vertexDrag.current = null;
-        roomDrag.current = null;
-        objectResize.current = null;
-        objectMove.current = null;
-        objectRotate.current = null;
-        setRoomEditPreview(null);
-        setObjectEditPreview(null);
-        setMovingVertex(false);
-        setMovingRoom(false);
-        setResizingObject(false);
-        setMovingObject(false);
-        setRotatingObject(false);
-        setGeometryError(null);
-      } else if (tool === 'divide' && divisionDraft) {
-        undoDivisionClick();
-      } else if (tool === 'room' && roomDraftVertices.length > 0) {
-        undoRoomDraftClick();
+      }
+
+      const pointerActive = Boolean(
+        drag.current ||
+        vertexDrag.current ||
+        roomDrag.current ||
+        objectResize.current ||
+        objectMove.current ||
+        objectRotate.current ||
+        marquee.current ||
+        roomClick.current,
+      );
+      if (action === 'cancel') {
+        if (pointerActive) {
+          event.preventDefault();
+          finishInteraction();
+          setGeometryError(null);
+        } else if (tool === 'divide' && divisionDraft) {
+          event.preventDefault();
+          undoDivisionClick();
+        } else if (tool === 'room' && roomDraftVertices.length > 0) {
+          event.preventDefault();
+          undoRoomDraftClick();
+        } else if (tool === 'object' && selectedPaletteItemId) {
+          event.preventDefault();
+          clearPaletteItem();
+        } else if (tool === 'select' && (selectedObjectIds.length > 0 || selectedRoomId)) {
+          event.preventDefault();
+          selectObject(null);
+        }
+        return;
+      }
+      if (pointerActive) return;
+      if (typeof action === 'object') {
+        event.preventDefault();
+        setTool(action.tool);
+        return;
+      }
+      if (action === 'undo' || action === 'redo') {
+        event.preventDefault();
+        if (action === 'undo') undoEditorCommand();
+        else redoEditorCommand();
+        return;
+      }
+      if (action === 'backspace') {
+        if (tool === 'divide' && divisionDraft) {
+          event.preventDefault();
+          undoDivisionClick();
+        } else if (tool === 'room' && roomDraftVertices.length > 0) {
+          event.preventDefault();
+          undoRoomDraftClick();
+        } else if (tool === 'select' && selectedObjectIds.length > 0) {
+          event.preventDefault();
+          deleteSelectedObjects();
+        }
+        return;
+      }
+      if (action === 'delete' && tool === 'select' && selectedObjectIds.length > 0) {
+        event.preventDefault();
+        deleteSelectedObjects();
+      } else if (action === 'copy' && tool === 'select' && selectedObjectIds.length > 0) {
+        if (copySelectedObjects() > 0) event.preventDefault();
+      } else if (action === 'paste' && tool === 'select') {
+        if (pasteCopiedObjects().length > 0) event.preventDefault();
       }
     };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === 'Space') setSpacePressed(false);
+    };
+    const onBlur = () => setSpacePressed(false);
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
   }, [
     tool,
+    selectedObjectIds.length,
+    selectedRoomId,
+    selectedPaletteItemId,
     divisionDraft,
-    movingVertex,
-    movingRoom,
-    resizingObject,
-    movingObject,
-    rotatingObject,
     roomDraftVertices.length,
+    finishInteraction,
     setGeometryError,
-    setRoomEditPreview,
-    setObjectEditPreview,
     undoDivisionClick,
     undoRoomDraftClick,
-  ]);
-
-  useEffect(() => {
-    if (tool !== 'select' || !selectedObjectId || movingObject || rotatingObject || resizingObject)
-      return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
-      if (
-        event.target instanceof HTMLElement &&
-        (event.target.isContentEditable ||
-          event.target.closest('input, textarea, select, [contenteditable="true"]'))
-      )
-        return;
-      event.preventDefault();
-      if (deleteLayoutObject(selectedObjectId)) selectObject(null);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [
-    tool,
-    selectedObjectId,
-    movingObject,
-    rotatingObject,
-    resizingObject,
-    deleteLayoutObject,
+    clearPaletteItem,
     selectObject,
+    setTool,
   ]);
 
   return (
     <div className={styles.wrapper}>
       <div
         aria-label="도면 편집 영역"
-        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${tool === 'object' && !selectedPaletteItem && !spacePressed ? styles.objectIdle : ''} ${snapCuePoint ? styles.snapReady : ''} ${tool === 'select' && !spacePressed ? styles.select : ''} ${movingVertex || (!spacePressed && tool === 'select' && hoveredEditVertex) ? styles.vertexDragging : ''} ${movingRoom ? styles.roomDragging : !movingVertex && !spacePressed && tool === 'select' && hoveredRoomInterior ? styles.roomReady : ''} ${!spacePressed && tool === 'select' && hoveredObject ? styles.objectHover : ''} ${movingObject ? styles.objectMoving : ''} ${resizingObject || (!spacePressed && tool === 'select' && hoveredObjectHandle) ? styles.objectResizeCursor : ''} ${rotatingObject || (!spacePressed && tool === 'select' && hoveredObjectRotateHandle) ? styles.objectRotateCursor : ''}`}
+        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${tool === 'object' && !selectedPaletteItem && !spacePressed ? styles.objectIdle : ''} ${snapCuePoint ? styles.snapReady : ''} ${tool === 'select' && !spacePressed ? styles.select : ''} ${movingVertex || (!spacePressed && tool === 'select' && hoveredEditVertex) ? styles.vertexDragging : ''} ${movingRoom ? styles.roomDragging : !movingVertex && !spacePressed && tool === 'select' && hoveredRoomInterior ? styles.roomReady : ''} ${!spacePressed && tool === 'select' && hoveredObject ? styles.objectHover : ''} ${movingObject ? styles.objectMoving : ''} ${resizingObject || (!spacePressed && tool === 'select' && hoveredObjectHandle) ? styles.objectResizeCursor : ''} ${rotatingObject || (!spacePressed && tool === 'select' && hoveredObjectRotateHandle) ? styles.objectRotateCursor : ''} ${marqueeRect ? styles.marqueeSelecting : ''}`}
         onWheel={handleWheel}
         onContextMenu={(event) => {
           if (tool !== 'object') return;
@@ -923,39 +1021,97 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
           {displayedObjects.map((object) => (
             <LayoutObjectShape key={object.id} object={object} viewport={viewport} />
           ))}
+          {tool === 'select' &&
+            selectedObjectIds.length > 1 &&
+            displayedObjects
+              .filter((object) => selectedObjectIds.includes(object.id))
+              .map((object) => {
+                const origin = worldToScreen({ x: object.x, y: object.y }, viewport);
+                const center = worldToScreen(
+                  { x: object.x + object.width / 2, y: object.y + object.height / 2 },
+                  viewport,
+                );
+                return (
+                  <g
+                    key={`selection-${object.id}`}
+                    transform={`rotate(${object.rotation} ${center.x} ${center.y})`}
+                  >
+                    <rect
+                      className={`${styles.objectSelectionBounds} ${object.locked ? styles.lockedSelectionBounds : ''}`}
+                      x={origin.x}
+                      y={origin.y}
+                      width={object.width * viewport.scale}
+                      height={object.height * viewport.scale}
+                    />
+                  </g>
+                );
+              })}
           {tool === 'select' && selectedObject && selectedObjectOrigin && selectedObjectCenter && (
             <g
               transform={`rotate(${selectedObject.rotation} ${selectedObjectCenter.x} ${selectedObjectCenter.y})`}
             >
               <rect
-                className={styles.objectSelectionBounds}
+                className={`${styles.objectSelectionBounds} ${selectedObject.locked ? styles.lockedSelectionBounds : ''}`}
                 x={selectedObjectOrigin.x}
                 y={selectedObjectOrigin.y}
                 width={selectedObject.width * viewport.scale}
                 height={selectedObject.height * viewport.scale}
               />
-              <rect
-                className={styles.objectResizeHandle}
-                x={selectedObjectOrigin.x + selectedObject.width * viewport.scale - 6}
-                y={selectedObjectOrigin.y + selectedObject.height * viewport.scale - 6}
-                width={12}
-                height={12}
-                rx={2}
-              />
-              <line
-                className={styles.objectRotationStem}
-                x1={selectedObjectCenter.x}
-                y1={selectedObjectOrigin.y}
-                x2={selectedObjectCenter.x}
-                y2={selectedObjectOrigin.y - 24}
-              />
-              <circle
-                className={styles.objectRotationHandle}
-                cx={selectedObjectCenter.x}
-                cy={selectedObjectOrigin.y - 24}
-                r={6}
-              />
+              {!selectedObject.locked && (
+                <>
+                  <rect
+                    className={styles.objectResizeHandle}
+                    x={selectedObjectOrigin.x + selectedObject.width * viewport.scale - 6}
+                    y={selectedObjectOrigin.y + selectedObject.height * viewport.scale - 6}
+                    width={12}
+                    height={12}
+                    rx={2}
+                  />
+                  <line
+                    className={styles.objectRotationStem}
+                    x1={selectedObjectCenter.x}
+                    y1={selectedObjectOrigin.y}
+                    x2={selectedObjectCenter.x}
+                    y2={selectedObjectOrigin.y - 24}
+                  />
+                  <circle
+                    className={styles.objectRotationHandle}
+                    cx={selectedObjectCenter.x}
+                    cy={selectedObjectOrigin.y - 24}
+                    r={6}
+                  />
+                </>
+              )}
             </g>
+          )}
+          {moveSnap?.xGuide && (
+            <line
+              className={styles.objectMoveGuide}
+              data-kind={moveSnap.xGuide.kind}
+              x1={worldToScreen({ x: moveSnap.xGuide.world, y: 0 }, viewport).x}
+              y1={0}
+              x2={worldToScreen({ x: moveSnap.xGuide.world, y: 0 }, viewport).x}
+              y2="100%"
+            />
+          )}
+          {moveSnap?.yGuide && (
+            <line
+              className={styles.objectMoveGuide}
+              data-kind={moveSnap.yGuide.kind}
+              x1={0}
+              y1={worldToScreen({ x: 0, y: moveSnap.yGuide.world }, viewport).y}
+              x2="100%"
+              y2={worldToScreen({ x: 0, y: moveSnap.yGuide.world }, viewport).y}
+            />
+          )}
+          {marqueeBounds && (
+            <rect
+              className={styles.marqueeSelection}
+              x={marqueeBounds.left}
+              y={marqueeBounds.top}
+              width={marqueeBounds.right - marqueeBounds.left}
+              height={marqueeBounds.bottom - marqueeBounds.top}
+            />
           )}
           {placementSnap && placementScreen && (
             <g className={styles.objectSnapGuide}>
@@ -1180,6 +1336,9 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
               ? '물품 배치: 가로·세로/같은 간격 보정 · 우클릭으로 선택 해제'
               : '물품을 선택하세요 · V로 선택 도구'}
           </span>
+        )}
+        {tool === 'select' && (
+          <span>물품 다중 선택: Shift+클릭 · 빈 도면 드래그 또는 Shift+드래그로 영역 선택</span>
         )}
         {roomError && <span className={styles.error}>{roomError}</span>}
         {geometryError && (

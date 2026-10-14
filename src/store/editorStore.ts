@@ -14,6 +14,9 @@ interface EditorState {
   selectedPaletteItemId: string | null;
   objectPlacement: ObjectAppearance;
   objectEditPreview: LayoutObject | null;
+  objectMovePreviewById: Record<string, LayoutObject> | null;
+  objectClipboard: LayoutObject[];
+  clipboardPasteCount: number;
   viewport: Viewport;
   roomDraftVertices: Point[];
   divisionDraft: { roomId: string; points: Point[] } | null;
@@ -26,7 +29,12 @@ interface EditorState {
   clearPaletteItem: () => void;
   setObjectPlacement: (patch: Partial<ObjectAppearance>) => void;
   selectObject: (objectId: string | null) => void;
+  selectObjects: (objectIds: string[]) => void;
+  toggleObjectSelection: (objectId: string) => void;
   setObjectEditPreview: (preview: LayoutObject | null) => void;
+  setObjectMovePreview: (preview: Record<string, LayoutObject> | null) => void;
+  copyObjects: (objects: LayoutObject[]) => void;
+  advanceClipboardPaste: () => void;
   setViewport: (viewport: Viewport) => void;
   resetViewport: () => void;
   addRoomDraftVertex: (point: Point) => void;
@@ -51,6 +59,9 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectedPaletteItemId: null,
   objectPlacement: defaultObjectAppearance('desk'),
   objectEditPreview: null,
+  objectMovePreviewById: null,
+  objectClipboard: [],
+  clipboardPasteCount: 0,
   viewport: DEFAULT_VIEWPORT,
   roomDraftVertices: [],
   divisionDraft: null,
@@ -84,7 +95,28 @@ export const useEditorStore = create<EditorState>((set) => ({
       selectedWallIndex: null,
       geometryError: null,
     }),
+  selectObjects: (objectIds) =>
+    set({
+      selectedObjectIds: [...new Set(objectIds)],
+      selectedRoomId: null,
+      selectedWallIndex: null,
+      geometryError: null,
+    }),
+  toggleObjectSelection: (objectId) =>
+    set((state) => ({
+      selectedObjectIds: state.selectedObjectIds.includes(objectId)
+        ? state.selectedObjectIds.filter((id) => id !== objectId)
+        : [...state.selectedObjectIds, objectId],
+      selectedRoomId: null,
+      selectedWallIndex: null,
+      geometryError: null,
+    })),
   setObjectEditPreview: (objectEditPreview) => set({ objectEditPreview }),
+  setObjectMovePreview: (objectMovePreviewById) => set({ objectMovePreviewById }),
+  copyObjects: (objects) =>
+    set({ objectClipboard: objects.map((object) => ({ ...object })), clipboardPasteCount: 0 }),
+  advanceClipboardPaste: () =>
+    set((state) => ({ clipboardPasteCount: state.clipboardPasteCount + 1 })),
   setViewport: (viewport) => set({ viewport }),
   resetViewport: () => set({ viewport: DEFAULT_VIEWPORT }),
   addRoomDraftVertex: (point) =>

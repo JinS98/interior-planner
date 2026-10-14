@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { EditorCanvas } from '../components/editor/EditorCanvas';
 import {
   areaFromSquareMeters,
@@ -11,6 +11,13 @@ import { polygonArea } from '../domain/geometry/coordinates';
 import { resizeWall } from '../domain/geometry/polygonValidation';
 import { getWallSegments } from '../domain/geometry/walls';
 import { roomEditErrorMessage } from '../features/room/edit';
+import { TOOL_SHORTCUTS } from '../features/editor/shortcuts';
+import { redoEditorCommand, undoEditorCommand } from '../features/history/actions';
+import {
+  copySelectedObjects,
+  deleteSelectedObjects,
+  pasteCopiedObjects,
+} from '../features/object/clipboard';
 import {
   MAX_OBJECT_SIZE_METERS,
   MIN_OBJECT_SIZE_METERS,
@@ -29,15 +36,33 @@ const tools: {
   description: string;
   shortcut?: string;
 }[] = [
-  { id: 'select', label: '선택', icon: '↖', description: '선택 도구', shortcut: 'V' },
-  { id: 'room', label: '공간', icon: '▱', description: '점을 클릭해 벽 그리기', shortcut: 'R' },
-  { id: 'object', label: '물품', icon: '▣', description: '선택한 물품 배치', shortcut: 'F' },
+  {
+    id: 'select',
+    label: '선택',
+    icon: '↖',
+    description: '선택 도구',
+    shortcut: TOOL_SHORTCUTS.select,
+  },
+  {
+    id: 'room',
+    label: '공간',
+    icon: '▱',
+    description: '점을 클릭해 벽 그리기',
+    shortcut: TOOL_SHORTCUTS.room,
+  },
+  {
+    id: 'object',
+    label: '물품',
+    icon: '▣',
+    description: '선택한 물품 배치',
+    shortcut: TOOL_SHORTCUTS.object,
+  },
   {
     id: 'divide',
     label: '분할',
     icon: '⊞',
     description: '기존 공간을 벽으로 나누기',
-    shortcut: 'D',
+    shortcut: TOOL_SHORTCUTS.divide,
   },
   { id: 'pan', label: '이동', icon: '✥', description: '도면 이동' },
 ];
@@ -171,11 +196,14 @@ function ObjectAppearanceControls({
   appearance,
   idPrefix,
   onChange,
+  deferColorCommit = false,
 }: {
   appearance: ObjectAppearance;
   idPrefix: string;
   onChange: (patch: Partial<ObjectAppearance>) => void;
+  deferColorCommit?: boolean;
 }) {
+  const [customColorDraft, setCustomColorDraft] = useState<string | null>(null);
   return (
     <div className={styles.objectAppearance}>
       <div className={styles.objectSizeRow}>
@@ -223,8 +251,15 @@ function ObjectAppearanceControls({
           <input
             type="color"
             aria-label="사용자 지정 색상"
-            value={appearance.color}
-            onChange={(event) => onChange({ color: event.target.value })}
+            value={customColorDraft ?? appearance.color}
+            onChange={(event) => {
+              if (deferColorCommit) setCustomColorDraft(event.target.value);
+              else onChange({ color: event.target.value });
+            }}
+            onBlur={() => {
+              if (deferColorCommit && customColorDraft) onChange({ color: customColorDraft });
+              setCustomColorDraft(null);
+            }}
           />
         </label>
       </div>
@@ -265,18 +300,22 @@ function TargetAreaInput({
           aria-invalid={invalid}
           aria-describedby={invalid ? 'target-area-error' : undefined}
           onChange={(event) => {
-            const next = event.target.value;
-            setDraft(next);
-            if (next === '') {
-              onChange(null);
-              return;
-            }
-            const numeric = Number(next);
-            if (Number.isFinite(numeric) && numeric > 0) {
-              onChange(areaToSquareMeters(numeric, areaUnit));
-            }
+            setDraft(event.target.value);
           }}
-          onBlur={() => setDraft(null)}
+          onBlur={() => {
+            if (draft !== null) {
+              if (draft === '') onChange(null);
+              else {
+                const numeric = Number(draft);
+                if (Number.isFinite(numeric) && numeric > 0)
+                  onChange(areaToSquareMeters(numeric, areaUnit));
+              }
+            }
+            setDraft(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+          }}
         />
         <span>{areaUnit === 'sqm' ? '㎡' : '평'}</span>
       </div>
@@ -340,29 +379,11 @@ export function App() {
   const clearPaletteItem = useEditorStore((state) => state.clearPaletteItem);
   const objectPlacement = useEditorStore((state) => state.objectPlacement);
   const setObjectPlacement = useEditorStore((state) => state.setObjectPlacement);
-  const selectedObjectId = useEditorStore((state) => state.selectedObjectIds[0] ?? null);
-  const selectObject = useEditorStore((state) => state.selectObject);
+  const selectedObjectIds = useEditorStore((state) => state.selectedObjectIds);
+  const clipboardCount = useEditorStore((state) => state.objectClipboard.length);
+  const selectedObjectId = selectedObjectIds.length === 1 ? selectedObjectIds[0] : null;
   const objectEditPreview = useEditorStore((state) => state.objectEditPreview);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey)
-        return;
-      if (
-        event.target instanceof HTMLElement &&
-        (event.target.isContentEditable ||
-          event.target.closest('input, textarea, select, [contenteditable="true"]'))
-      )
-        return;
-      const shortcutTool = tools.find(
-        ({ shortcut }) => shortcut && event.code === `Key${shortcut}`,
-      );
-      if (!shortcutTool) return;
-      event.preventDefault();
-      setTool(shortcutTool.id);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [setTool]);
+  const objectMovePreviewById = useEditorStore((state) => state.objectMovePreviewById);
   const resetViewport = useEditorStore((state) => state.resetViewport);
   const activeFloorId = useEditorStore((state) => state.activeFloorId);
   const activeProjectId = useEditorStore((state) => state.activeProjectId);
@@ -379,15 +400,23 @@ export function App() {
   const setTargetAreaSqm = useProjectStore((state) => state.setTargetAreaSqm);
   const updateRoomVertices = useProjectStore((state) => state.updateRoomVertices);
   const updateLayoutObject = useProjectStore((state) => state.updateLayoutObject);
-  const deleteLayoutObject = useProjectStore((state) => state.deleteLayoutObject);
+  const setLayoutObjectsLocked = useProjectStore((state) => state.setLayoutObjectsLocked);
+  const historyPast = useProjectStore((state) => state.historyPast);
+  const historyFuture = useProjectStore((state) => state.historyFuture);
   const floor = useProjectStore((state) => state.floorsById[activeFloorId ?? '']);
   const roomsById = useProjectStore((state) => state.roomsById);
   const objectsById = useProjectStore((state) => state.objectsById);
   const selectedObject = selectedObjectId
-    ? objectEditPreview?.id === selectedObjectId
-      ? objectEditPreview
-      : objectsById[selectedObjectId]
+    ? (objectMovePreviewById?.[selectedObjectId] ??
+      (objectEditPreview?.id === selectedObjectId
+        ? objectEditPreview
+        : objectsById[selectedObjectId]))
     : null;
+  const selectedObjects = selectedObjectIds
+    .map((id) => objectsById[id])
+    .filter((object) => object && object.floorId === activeFloorId);
+  const lockedCount = selectedObjects.filter((object) => object.locked).length;
+  const unlockedCount = selectedObjects.length - lockedCount;
   const rooms = (floor?.roomIds ?? [])
     .map((id) => roomsById[id])
     .filter((room) => room != null)
@@ -444,6 +473,32 @@ export function App() {
               <span className={styles.dot} /> 1F <span className={styles.muted}>/ 도면 편집</span>
             </div>
             <div className={styles.subheaderActions}>
+              <button
+                type="button"
+                disabled={historyPast.length === 0}
+                onClick={undoEditorCommand}
+                title={
+                  historyPast.at(-1)
+                    ? `${historyPast.at(-1)?.label} 되돌리기 (Ctrl/Cmd+Z)`
+                    : '되돌리기'
+                }
+                aria-keyshortcuts="Control+Z Meta+Z"
+              >
+                되돌리기
+              </button>
+              <button
+                type="button"
+                disabled={historyFuture.length === 0}
+                onClick={redoEditorCommand}
+                title={
+                  historyFuture.at(-1)
+                    ? `${historyFuture.at(-1)?.label} 다시 실행 (Ctrl/Cmd+Shift+Z)`
+                    : '다시 실행'
+                }
+                aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
+              >
+                다시 실행
+              </button>
               <div className={styles.unitToggle} role="group" aria-label="면적 표시 단위">
                 <button
                   type="button"
@@ -609,55 +664,101 @@ export function App() {
               </div>
             )}
           </section>
+          {tool === 'select' && (selectedObjects.length > 0 || clipboardCount > 0) && (
+            <section className={styles.objectEditSection} aria-label="물품 편집 명령">
+              <h3>물품 작업</h3>
+              <div className={styles.objectActions}>
+                <button
+                  type="button"
+                  disabled={selectedObjects.length === 0}
+                  onClick={copySelectedObjects}
+                >
+                  복사
+                </button>
+                <button type="button" disabled={clipboardCount === 0} onClick={pasteCopiedObjects}>
+                  붙여넣기
+                </button>
+                <button
+                  type="button"
+                  disabled={unlockedCount === 0}
+                  onClick={() => setLayoutObjectsLocked(selectedObjectIds, true)}
+                >
+                  잠금
+                </button>
+                <button
+                  type="button"
+                  disabled={lockedCount === 0}
+                  onClick={() => setLayoutObjectsLocked(selectedObjectIds, false)}
+                >
+                  잠금 해제
+                </button>
+                <button
+                  type="button"
+                  className={styles.objectDangerButton}
+                  disabled={unlockedCount === 0}
+                  onClick={deleteSelectedObjects}
+                >
+                  선택 삭제
+                </button>
+              </div>
+              {lockedCount > 0 && <p>잠긴 물품 {lockedCount}개는 이동·수정·삭제에서 제외됩니다.</p>}
+            </section>
+          )}
+          {tool === 'select' && selectedObjectIds.length > 1 && (
+            <section className={styles.objectEditSection} aria-label="다중 선택된 물품">
+              <h3>{selectedObjectIds.length}개 물품 선택</h3>
+              <p>
+                잠기지 않은 물품 하나를 드래그하면 함께 이동합니다. Shift+클릭으로 선택을 바꿀 수
+                있습니다.
+              </p>
+            </section>
+          )}
           {tool === 'select' && selectedObject && (
             <section
               className={styles.objectEditSection}
               aria-label={`${selectedObject.name} 편집`}
             >
-              <h3>{selectedObject.name} 편집</h3>
+              <h3>
+                {selectedObject.name} 편집{selectedObject.locked ? ' · 잠금' : ''}
+              </h3>
               <p>
-                물품을 드래그해 이동하고, 위쪽 손잡이로 회전하거나 오른쪽 아래 손잡이로 크기를
-                바꾸세요.
+                {selectedObject.locked
+                  ? '편집하려면 위의 잠금 해제를 누르세요.'
+                  : '물품을 드래그해 이동하고, 위쪽 손잡이로 회전하거나 오른쪽 아래 손잡이로 크기를 바꾸세요.'}
               </p>
-              <div className={styles.objectPositionControls}>
-                <span className={styles.objectFieldLabel}>
-                  위치 (도면 원점 기준, 회전 전 왼쪽 위)
-                </span>
-                <div className={styles.objectSizeRow} key={`${selectedObject.id}-position`}>
-                  <ObjectCoordinateInput
-                    id="selected-object-x"
-                    label="X 좌표"
-                    value={selectedObject.x}
-                    onCommit={(x) => updateLayoutObject(selectedObject.id, { x })}
-                  />
-                  <ObjectCoordinateInput
-                    id="selected-object-y"
-                    label="Y 좌표"
-                    value={selectedObject.y}
-                    onCommit={(y) => updateLayoutObject(selectedObject.id, { y })}
-                  />
+              <fieldset className={styles.objectLockedFields} disabled={selectedObject.locked}>
+                <div className={styles.objectPositionControls}>
+                  <span className={styles.objectFieldLabel}>
+                    위치 (도면 원점 기준, 회전 전 왼쪽 위)
+                  </span>
+                  <div className={styles.objectSizeRow} key={`${selectedObject.id}-position`}>
+                    <ObjectCoordinateInput
+                      id="selected-object-x"
+                      label="X 좌표"
+                      value={selectedObject.x}
+                      onCommit={(x) => updateLayoutObject(selectedObject.id, { x })}
+                    />
+                    <ObjectCoordinateInput
+                      id="selected-object-y"
+                      label="Y 좌표"
+                      value={selectedObject.y}
+                      onCommit={(y) => updateLayoutObject(selectedObject.id, { y })}
+                    />
+                  </div>
                 </div>
-              </div>
-              <ObjectAppearanceControls
-                key={selectedObject.id}
-                appearance={selectedObject}
-                idPrefix="selected-object"
-                onChange={(patch) => updateLayoutObject(selectedObject.id, patch)}
-              />
-              <ObjectRotationInput
-                key={`${selectedObject.id}-rotation`}
-                rotation={selectedObject.rotation}
-                onCommit={(rotation) => updateLayoutObject(selectedObject.id, { rotation })}
-              />
-              <button
-                type="button"
-                className={styles.objectDeleteButton}
-                onClick={() => {
-                  if (deleteLayoutObject(selectedObject.id)) selectObject(null);
-                }}
-              >
-                물품 삭제
-              </button>
+                <ObjectAppearanceControls
+                  key={selectedObject.id}
+                  appearance={selectedObject}
+                  idPrefix="selected-object"
+                  deferColorCommit
+                  onChange={(patch) => updateLayoutObject(selectedObject.id, patch)}
+                />
+                <ObjectRotationInput
+                  key={`${selectedObject.id}-rotation`}
+                  rotation={selectedObject.rotation}
+                  onCommit={(rotation) => updateLayoutObject(selectedObject.id, { rotation })}
+                />
+              </fieldset>
             </section>
           )}
           <section className={styles.areaSection} aria-label="공간 면적">
@@ -743,13 +844,34 @@ export function App() {
             </section>
           )}
           <div className={styles.notice}>
-            공간을 그리고 분할하거나, Palette에서 물품의 크기·모양·색을 정해 배치하세요. 선택 도구로
-            놓인 물품을 수정할 수 있습니다.
+            공간을 그리고 분할하거나, Palette에서 물품의 크기·모양·색을 정해 배치하세요. 선택
+            도구에서 Shift+클릭과 드래그로 여러 물품을 선택할 수 있습니다.
           </div>
           <div className={styles.shortcuts}>
             <p>빠른 조작</p>
             <span>
-              직전 점 취소 <kbd>Esc</kbd>
+              직전 점·선택 취소 <kbd>Esc</kbd>
+            </span>
+            <span>
+              직전 점 취소 <kbd>Backspace</kbd>
+            </span>
+            <span>
+              물품 복사 <kbd>Ctrl/Cmd + C</kbd>
+            </span>
+            <span>
+              물품 붙여넣기 <kbd>Ctrl/Cmd + V</kbd>
+            </span>
+            <span>
+              선택 삭제 <kbd>Delete</kbd>
+            </span>
+            <span>
+              되돌리기 <kbd>Ctrl/Cmd + Z</kbd>
+            </span>
+            <span>
+              다시 실행 <kbd>Ctrl/Cmd + Shift + Z</kbd>
+            </span>
+            <span>
+              다시 실행 <kbd>Ctrl + Y</kbd>
             </span>
             <span>
               선택 도구 <kbd>V</kbd>

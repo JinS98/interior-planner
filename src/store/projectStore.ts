@@ -7,6 +7,7 @@ import {
   layoutObjectFromPaletteItem,
 } from '../features/object/catalog';
 import { normalizeObjectRotation } from '../features/object/edit';
+import { HISTORY_LIMIT, projectSnapshot, type EditCommand } from '../features/history/command';
 import type { RoomEditError } from '../features/room/edit';
 import type {
   Floor,
@@ -48,6 +49,10 @@ export interface ProjectState {
   roomsById: Record<string, Room>;
   objectsById: Record<string, LayoutObject>;
   paletteItemsById: Record<string, PaletteItem>;
+  historyPast: EditCommand[];
+  historyFuture: EditCommand[];
+  undo: () => boolean;
+  redo: () => boolean;
   replaceProjectData: (
     data: Pick<
       ProjectState,
@@ -71,6 +76,14 @@ export interface ProjectState {
       Pick<LayoutObject, 'x' | 'y' | 'width' | 'height' | 'color' | 'shape' | 'rotation'>
     >,
   ) => boolean;
+  moveLayoutObjects: (objectIds: string[], delta: Point) => boolean;
+  duplicateLayoutObjects: (
+    floorId: string,
+    sourceObjects: LayoutObject[],
+    offset: Point,
+  ) => string[];
+  setLayoutObjectsLocked: (objectIds: string[], locked: boolean) => boolean;
+  deleteLayoutObjects: (objectIds: string[]) => string[];
   deleteLayoutObject: (objectId: string) => boolean;
   splitRoom: (roomId: string, path: Point[]) => boolean;
   updateRoomVertices: (roomId: string, vertices: Point[]) => RoomEditError | null;
@@ -78,255 +91,449 @@ export interface ProjectState {
 }
 
 /** 향후 Firestore 저장 스냅샷의 원본. 그리기 중인 점은 여기에 넣지 않는다. */
-export const useProjectStore = create<ProjectState>((set) => ({
-  projectsById: { [LOCAL_PROJECT_ID]: initialProject },
-  floorsById: { [LOCAL_FLOOR_ID]: initialFloor },
-  roomsById: {},
-  objectsById: {},
-  paletteItemsById: Object.fromEntries(defaultPaletteItems.map((item) => [item.id, item])),
-  replaceProjectData: (data) => set(data),
-  addPaletteItem: (projectId, input) => {
-    const name = input.name.trim();
-    if (
-      !name ||
-      name.length > 40 ||
-      !['furniture', 'electronics', 'facility', 'commercial'].includes(input.category) ||
-      !isValidObjectAppearance(input)
-    )
-      return null;
-    let created: PaletteItem | null = null;
+export const useProjectStore = create<ProjectState>((set) => {
+  const commit = (
+    label: string,
+    update: (state: ProjectState) => Partial<ProjectState> | ProjectState,
+  ) =>
     set((state) => {
-      const project = state.projectsById[projectId];
-      if (!project) return state;
-      const item: PaletteItem = {
-        ...input,
-        id: crypto.randomUUID(),
-        projectId,
-        name,
-        builtIn: false,
+      const patch = update(state);
+      if (patch === state) return state;
+      const command: EditCommand = {
+        label,
+        before: projectSnapshot(state),
+        after: projectSnapshot({ ...state, ...patch }),
       };
-      created = item;
       return {
-        projectsById: {
-          ...state.projectsById,
-          [projectId]: {
-            ...project,
-            paletteItemIds: [...project.paletteItemIds, item.id],
-            updatedAt: new Date().toISOString(),
+        ...patch,
+        historyPast: [...state.historyPast, command].slice(-HISTORY_LIMIT),
+        historyFuture: [],
+      };
+    });
+
+  return {
+    projectsById: { [LOCAL_PROJECT_ID]: initialProject },
+    floorsById: { [LOCAL_FLOOR_ID]: initialFloor },
+    roomsById: {},
+    objectsById: {},
+    paletteItemsById: Object.fromEntries(defaultPaletteItems.map((item) => [item.id, item])),
+    historyPast: [],
+    historyFuture: [],
+    replaceProjectData: (data) => set({ ...data, historyPast: [], historyFuture: [] }),
+    undo: () => {
+      let undone = false;
+      set((state) => {
+        const command = state.historyPast.at(-1);
+        if (!command) return state;
+        undone = true;
+        return {
+          ...command.before,
+          historyPast: state.historyPast.slice(0, -1),
+          historyFuture: [...state.historyFuture, command],
+        };
+      });
+      return undone;
+    },
+    redo: () => {
+      let redone = false;
+      set((state) => {
+        const command = state.historyFuture.at(-1);
+        if (!command) return state;
+        redone = true;
+        return {
+          ...command.after,
+          historyPast: [...state.historyPast, command],
+          historyFuture: state.historyFuture.slice(0, -1),
+        };
+      });
+      return redone;
+    },
+    addPaletteItem: (projectId, input) => {
+      const name = input.name.trim();
+      if (
+        !name ||
+        name.length > 40 ||
+        !['furniture', 'electronics', 'facility', 'commercial'].includes(input.category) ||
+        !isValidObjectAppearance(input)
+      )
+        return null;
+      let created: PaletteItem | null = null;
+      commit('물품 팔레트 추가', (state) => {
+        const project = state.projectsById[projectId];
+        if (!project) return state;
+        const item: PaletteItem = {
+          ...input,
+          id: crypto.randomUUID(),
+          projectId,
+          name,
+          builtIn: false,
+        };
+        created = item;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [projectId]: {
+              ...project,
+              paletteItemIds: [...project.paletteItemIds, item.id],
+              updatedAt: new Date().toISOString(),
+            },
           },
-        },
-        paletteItemsById: { ...state.paletteItemsById, [item.id]: item },
-      };
-    });
-    return created;
-  },
-  createRoom: (floorId, vertices) => {
-    if (validatePolygon(vertices)) return false;
-    let created = false;
-    set((state) => {
-      const floor = state.floorsById[floorId];
-      const project = floor && state.projectsById[floor.projectId];
-      if (!floor || !project) return state;
+          paletteItemsById: { ...state.paletteItemsById, [item.id]: item },
+        };
+      });
+      return created;
+    },
+    createRoom: (floorId, vertices) => {
+      if (validatePolygon(vertices)) return false;
+      let created = false;
+      commit('공간 생성', (state) => {
+        const floor = state.floorsById[floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!floor || !project) return state;
 
-      const room: Room = {
-        id: crypto.randomUUID(),
-        floorId,
-        name: `공간 ${floor.roomIds.length + 1}`,
-        vertices: vertices.map((point) => ({ ...point })),
-      };
-      created = true;
-      return {
-        projectsById: {
-          ...state.projectsById,
-          [project.id]: { ...project, updatedAt: new Date().toISOString() },
-        },
-        floorsById: {
-          ...state.floorsById,
-          [floorId]: { ...floor, roomIds: [...floor.roomIds, room.id] },
-        },
-        roomsById: { ...state.roomsById, [room.id]: room },
-      };
-    });
-    return created;
-  },
-  createLayoutObject: (floorId, paletteItemId, center, appearance) => {
-    if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) return false;
-    let created = false;
-    set((state) => {
-      const floor = state.floorsById[floorId];
-      const project = floor && state.projectsById[floor.projectId];
-      const item = state.paletteItemsById[paletteItemId];
-      if (!floor || !project || !item || item.projectId !== project.id) return state;
-      const selectedAppearance = appearance ?? item;
-      if (!isValidObjectAppearance(selectedAppearance)) return state;
-      const object = layoutObjectFromPaletteItem(
-        floorId,
-        item,
-        center,
-        crypto.randomUUID(),
-        selectedAppearance,
-      );
-      created = true;
-      return {
-        projectsById: {
-          ...state.projectsById,
-          [project.id]: { ...project, updatedAt: new Date().toISOString() },
-        },
-        floorsById: {
-          ...state.floorsById,
-          [floorId]: { ...floor, objectIds: [...floor.objectIds, object.id] },
-        },
-        objectsById: { ...state.objectsById, [object.id]: object },
-      };
-    });
-    return created;
-  },
-  updateLayoutObject: (objectId, patch) => {
-    let updated = false;
-    set((state) => {
-      const object = state.objectsById[objectId];
-      const floor = object && state.floorsById[object.floorId];
-      const project = floor && state.projectsById[floor.projectId];
-      if (!object || !project) return state;
-      const appearance = {
-        width: patch.width ?? object.width,
-        height: patch.height ?? object.height,
-        color: patch.color ?? object.color,
-        shape: patch.shape ?? object.shape,
-      };
-      const x = patch.x ?? object.x;
-      const y = patch.y ?? object.y;
-      const rotation = patch.rotation ?? object.rotation;
-      if (
-        !isValidObjectAppearance(appearance) ||
-        !Number.isFinite(x) ||
-        !Number.isFinite(y) ||
-        !Number.isFinite(rotation)
-      )
-        return state;
-      const next = { ...object, ...appearance, x, y, rotation: normalizeObjectRotation(rotation) };
-      updated = true;
-      if (
-        next.x === object.x &&
-        next.y === object.y &&
-        next.width === object.width &&
-        next.height === object.height &&
-        next.color === object.color &&
-        next.shape === object.shape &&
-        next.rotation === object.rotation
-      )
-        return state;
-      return {
-        projectsById: {
-          ...state.projectsById,
-          [project.id]: { ...project, updatedAt: new Date().toISOString() },
-        },
-        objectsById: { ...state.objectsById, [objectId]: next },
-      };
-    });
-    return updated;
-  },
-  deleteLayoutObject: (objectId) => {
-    let deleted = false;
-    set((state) => {
-      const object = state.objectsById[objectId];
-      const floor = object && state.floorsById[object.floorId];
-      const project = floor && state.projectsById[floor.projectId];
-      if (!object || !floor || !project) return state;
-      const objectsById = { ...state.objectsById };
-      delete objectsById[objectId];
-      deleted = true;
-      return {
-        projectsById: {
-          ...state.projectsById,
-          [project.id]: { ...project, updatedAt: new Date().toISOString() },
-        },
-        floorsById: {
-          ...state.floorsById,
-          [floor.id]: { ...floor, objectIds: floor.objectIds.filter((id) => id !== objectId) },
-        },
-        objectsById,
-      };
-    });
-    return deleted;
-  },
-  splitRoom: (roomId, path) => {
-    let divided = false;
-    set((state) => {
-      const room = state.roomsById[roomId];
-      const floor = room && state.floorsById[room.floorId];
-      const project = floor && state.projectsById[floor.projectId];
-      if (!room || !floor || !project) return state;
-      const parts = splitPolygon(room.vertices, path);
-      if (!parts) return state;
-
-      const newRoom: Room = {
-        id: crypto.randomUUID(),
-        floorId: floor.id,
-        name: `공간 ${floor.roomIds.length + 1}`,
-        vertices: parts[1].map((point) => ({ ...point })),
-      };
-      divided = true;
-      return {
-        projectsById: {
-          ...state.projectsById,
-          [project.id]: { ...project, updatedAt: new Date().toISOString() },
-        },
-        floorsById: {
-          ...state.floorsById,
-          [floor.id]: { ...floor, roomIds: [...floor.roomIds, newRoom.id] },
-        },
-        roomsById: {
-          ...state.roomsById,
-          [roomId]: { ...room, vertices: parts[0].map((point) => ({ ...point })) },
-          [newRoom.id]: newRoom,
-        },
-      };
-    });
-    return divided;
-  },
-  updateRoomVertices: (roomId, vertices) => {
-    const validationError = validatePolygon(vertices);
-    if (validationError) return validationError;
-    let found = false;
-    set((state) => {
-      const room = state.roomsById[roomId];
-      const floor = room && state.floorsById[room.floorId];
-      const project = floor && state.projectsById[floor.projectId];
-      if (!room || !floor || !project) return state;
-      found = true;
-      if (
-        room.vertices.length === vertices.length &&
-        room.vertices.every(
-          (vertex, index) => vertex.x === vertices[index].x && vertex.y === vertices[index].y,
+        const room: Room = {
+          id: crypto.randomUUID(),
+          floorId,
+          name: `공간 ${floor.roomIds.length + 1}`,
+          vertices: vertices.map((point) => ({ ...point })),
+        };
+        created = true;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          floorsById: {
+            ...state.floorsById,
+            [floorId]: { ...floor, roomIds: [...floor.roomIds, room.id] },
+          },
+          roomsById: { ...state.roomsById, [room.id]: room },
+        };
+      });
+      return created;
+    },
+    createLayoutObject: (floorId, paletteItemId, center, appearance) => {
+      if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) return false;
+      let created = false;
+      commit('물품 배치', (state) => {
+        const floor = state.floorsById[floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        const item = state.paletteItemsById[paletteItemId];
+        if (!floor || !project || !item || item.projectId !== project.id) return state;
+        const selectedAppearance = appearance ?? item;
+        if (!isValidObjectAppearance(selectedAppearance)) return state;
+        const object = layoutObjectFromPaletteItem(
+          floorId,
+          item,
+          center,
+          crypto.randomUUID(),
+          selectedAppearance,
+        );
+        created = true;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          floorsById: {
+            ...state.floorsById,
+            [floorId]: { ...floor, objectIds: [...floor.objectIds, object.id] },
+          },
+          objectsById: { ...state.objectsById, [object.id]: object },
+        };
+      });
+      return created;
+    },
+    updateLayoutObject: (objectId, patch) => {
+      let updated = false;
+      commit('물품 수정', (state) => {
+        const object = state.objectsById[objectId];
+        const floor = object && state.floorsById[object.floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!object || !project || object.locked) return state;
+        const appearance = {
+          width: patch.width ?? object.width,
+          height: patch.height ?? object.height,
+          color: patch.color ?? object.color,
+          shape: patch.shape ?? object.shape,
+        };
+        const x = patch.x ?? object.x;
+        const y = patch.y ?? object.y;
+        const rotation = patch.rotation ?? object.rotation;
+        if (
+          !isValidObjectAppearance(appearance) ||
+          !Number.isFinite(x) ||
+          !Number.isFinite(y) ||
+          !Number.isFinite(rotation)
         )
-      ) {
-        return state;
-      }
-      return {
-        projectsById: {
-          ...state.projectsById,
-          [project.id]: { ...project, updatedAt: new Date().toISOString() },
-        },
-        roomsById: {
-          ...state.roomsById,
-          [roomId]: { ...room, vertices: vertices.map((vertex) => ({ ...vertex })) },
-        },
-      };
-    });
-    return found ? null : 'room-not-found';
-  },
-  setTargetAreaSqm: (projectId, targetAreaSqm) => {
-    if (targetAreaSqm !== null && (!Number.isFinite(targetAreaSqm) || targetAreaSqm <= 0)) return;
-    set((state) => {
-      const project = state.projectsById[projectId];
-      if (!project || project.targetAreaSqm === targetAreaSqm) return state;
-      return {
-        projectsById: {
-          ...state.projectsById,
-          [projectId]: { ...project, targetAreaSqm, updatedAt: new Date().toISOString() },
-        },
-      };
-    });
-  },
-}));
+          return state;
+        const next = {
+          ...object,
+          ...appearance,
+          x,
+          y,
+          rotation: normalizeObjectRotation(rotation),
+        };
+        updated = true;
+        if (
+          next.x === object.x &&
+          next.y === object.y &&
+          next.width === object.width &&
+          next.height === object.height &&
+          next.color === object.color &&
+          next.shape === object.shape &&
+          next.rotation === object.rotation
+        )
+          return state;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          objectsById: { ...state.objectsById, [objectId]: next },
+        };
+      });
+      return updated;
+    },
+    moveLayoutObjects: (objectIds, delta) => {
+      if (objectIds.length === 0 || !Number.isFinite(delta.x) || !Number.isFinite(delta.y))
+        return false;
+      let moved = false;
+      commit('물품 이동', (state) => {
+        const ids = [...new Set(objectIds)];
+        const objects = ids.map((id) => state.objectsById[id]);
+        if (objects.some((object) => !object)) return state;
+        if (objects.some((object) => object.locked)) return state;
+        if (
+          objects.some(
+            (object) =>
+              !Number.isFinite(object.x + delta.x) || !Number.isFinite(object.y + delta.y),
+          )
+        )
+          return state;
+        const floorId = objects[0].floorId;
+        if (objects.some((object) => object.floorId !== floorId)) return state;
+        const floor = state.floorsById[floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!floor || !project) return state;
+        moved = true;
+        if (delta.x === 0 && delta.y === 0) return state;
+        const objectsById = { ...state.objectsById };
+        for (const object of objects) {
+          objectsById[object.id] = { ...object, x: object.x + delta.x, y: object.y + delta.y };
+        }
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          objectsById,
+        };
+      });
+      return moved;
+    },
+    duplicateLayoutObjects: (floorId, sourceObjects, offset) => {
+      if (
+        sourceObjects.length === 0 ||
+        !Number.isFinite(offset.x) ||
+        !Number.isFinite(offset.y) ||
+        sourceObjects.some(
+          (object) =>
+            !isValidObjectAppearance(object) ||
+            !Number.isFinite(object.x + offset.x) ||
+            !Number.isFinite(object.y + offset.y) ||
+            !Number.isFinite(object.rotation),
+        )
+      )
+        return [];
+      let createdIds: string[] = [];
+      commit('물품 붙여넣기', (state) => {
+        const floor = state.floorsById[floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!floor || !project || sourceObjects.some((object) => object.floorId !== floorId))
+          return state;
+        const duplicates = sourceObjects.map((object) => ({
+          ...object,
+          id: crypto.randomUUID(),
+          x: object.x + offset.x,
+          y: object.y + offset.y,
+          locked: false,
+        }));
+        createdIds = duplicates.map((object) => object.id);
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          floorsById: {
+            ...state.floorsById,
+            [floorId]: { ...floor, objectIds: [...floor.objectIds, ...createdIds] },
+          },
+          objectsById: {
+            ...state.objectsById,
+            ...Object.fromEntries(duplicates.map((object) => [object.id, object])),
+          },
+        };
+      });
+      return createdIds;
+    },
+    setLayoutObjectsLocked: (objectIds, locked) => {
+      if (objectIds.length === 0) return false;
+      let updated = false;
+      commit(locked ? '물품 잠금' : '물품 잠금 해제', (state) => {
+        const objects = [...new Set(objectIds)].map((id) => state.objectsById[id]);
+        if (objects.some((object) => !object)) return state;
+        const floorId = objects[0].floorId;
+        if (objects.some((object) => object.floorId !== floorId)) return state;
+        const floor = state.floorsById[floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!floor || !project) return state;
+        updated = true;
+        if (objects.every((object) => object.locked === locked)) return state;
+        const objectsById = { ...state.objectsById };
+        for (const object of objects) objectsById[object.id] = { ...object, locked };
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          objectsById,
+        };
+      });
+      return updated;
+    },
+    deleteLayoutObjects: (objectIds) => {
+      let deletedIds: string[] = [];
+      commit('물품 삭제', (state) => {
+        const objects = [...new Set(objectIds)]
+          .map((id) => state.objectsById[id])
+          .filter((object) => object && !object.locked);
+        if (objects.length === 0) return state;
+        const floorId = objects[0].floorId;
+        if (objects.some((object) => object.floorId !== floorId)) return state;
+        const floor = state.floorsById[floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!floor || !project) return state;
+        deletedIds = objects.map((object) => object.id);
+        const deletedSet = new Set(deletedIds);
+        const objectsById = { ...state.objectsById };
+        for (const id of deletedIds) delete objectsById[id];
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          floorsById: {
+            ...state.floorsById,
+            [floorId]: { ...floor, objectIds: floor.objectIds.filter((id) => !deletedSet.has(id)) },
+          },
+          objectsById,
+        };
+      });
+      return deletedIds;
+    },
+    deleteLayoutObject: (objectId) => {
+      let deleted = false;
+      commit('물품 삭제', (state) => {
+        const object = state.objectsById[objectId];
+        const floor = object && state.floorsById[object.floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!object || !floor || !project || object.locked) return state;
+        const objectsById = { ...state.objectsById };
+        delete objectsById[objectId];
+        deleted = true;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          floorsById: {
+            ...state.floorsById,
+            [floor.id]: { ...floor, objectIds: floor.objectIds.filter((id) => id !== objectId) },
+          },
+          objectsById,
+        };
+      });
+      return deleted;
+    },
+    splitRoom: (roomId, path) => {
+      let divided = false;
+      commit('공간 분할', (state) => {
+        const room = state.roomsById[roomId];
+        const floor = room && state.floorsById[room.floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!room || !floor || !project) return state;
+        const parts = splitPolygon(room.vertices, path);
+        if (!parts) return state;
+
+        const newRoom: Room = {
+          id: crypto.randomUUID(),
+          floorId: floor.id,
+          name: `공간 ${floor.roomIds.length + 1}`,
+          vertices: parts[1].map((point) => ({ ...point })),
+        };
+        divided = true;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          floorsById: {
+            ...state.floorsById,
+            [floor.id]: { ...floor, roomIds: [...floor.roomIds, newRoom.id] },
+          },
+          roomsById: {
+            ...state.roomsById,
+            [roomId]: { ...room, vertices: parts[0].map((point) => ({ ...point })) },
+            [newRoom.id]: newRoom,
+          },
+        };
+      });
+      return divided;
+    },
+    updateRoomVertices: (roomId, vertices) => {
+      const validationError = validatePolygon(vertices);
+      if (validationError) return validationError;
+      let found = false;
+      commit('공간 수정', (state) => {
+        const room = state.roomsById[roomId];
+        const floor = room && state.floorsById[room.floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!room || !floor || !project) return state;
+        found = true;
+        if (
+          room.vertices.length === vertices.length &&
+          room.vertices.every(
+            (vertex, index) => vertex.x === vertices[index].x && vertex.y === vertices[index].y,
+          )
+        ) {
+          return state;
+        }
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          roomsById: {
+            ...state.roomsById,
+            [roomId]: { ...room, vertices: vertices.map((vertex) => ({ ...vertex })) },
+          },
+        };
+      });
+      return found ? null : 'room-not-found';
+    },
+    setTargetAreaSqm: (projectId, targetAreaSqm) => {
+      if (targetAreaSqm !== null && (!Number.isFinite(targetAreaSqm) || targetAreaSqm <= 0)) return;
+      commit('목표 면적 수정', (state) => {
+        const project = state.projectsById[projectId];
+        if (!project || project.targetAreaSqm === targetAreaSqm) return state;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [projectId]: { ...project, targetAreaSqm, updatedAt: new Date().toISOString() },
+          },
+        };
+      });
+    },
+  };
+});

@@ -154,6 +154,14 @@
     border-radius: 7px;
     color: #66738b;
     cursor: pointer;
+    &:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    &:focus-visible {
+      outline: 2px solid #526fe1;
+      outline-offset: 2px;
+    }
   }
 }
 .subheaderActions {
@@ -425,24 +433,45 @@
   display: block;
   margin-top: 14px;
 }
-.objectDeleteButton {
-  width: 100%;
-  margin-top: 14px;
-  padding: 9px;
-  border: 1px solid #efc4c9;
-  border-radius: 8px;
-  background: #fff7f8;
-  color: #a92739;
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  &:hover {
-    background: #ffebee;
+.objectActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  button {
+    padding: 8px 5px;
+    border: 1px solid #dce2ec;
+    border-radius: 8px;
+    background: #fff;
+    color: #33415e;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    &:hover:not(:disabled) {
+      background: #f2f5fc;
+    }
+    &:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    &:focus-visible {
+      outline: 2px solid #526fe1;
+      outline-offset: 2px;
+    }
   }
-  &:focus-visible {
-    outline: 2px solid #b42332;
-    outline-offset: 2px;
+  .objectDangerButton {
+    border-color: #efc4c9;
+    color: #a92739;
+    background: #fff7f8;
+  }
+}
+.objectLockedFields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  &:disabled {
+    opacity: 0.55;
   }
 }
 .objectFieldLabel {

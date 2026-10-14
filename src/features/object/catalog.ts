@@ -100,7 +100,10 @@ export function layoutObjectFromPaletteItem(
     name: item.name,
     x: center.x - appearance.width / 2,
     y: center.y - appearance.height / 2,
-    ...appearance,
+    width: appearance.width,
+    height: appearance.height,
+    color: appearance.color,
+    shape: appearance.shape,
     rotation: 0,
     locked: false,
   };
