@@ -20,9 +20,19 @@ import { getWallSegments, type WallSegment } from '../../domain/geometry/walls';
 import { isNearRoomStart, shouldCloseRoomAt } from '../../features/room/closure';
 import { findRoomBoundarySnap } from '../../features/room/division';
 import { roomEditErrorMessage, translateRoomFromScreenDrag } from '../../features/room/edit';
+import {
+  isNearRoomRotationHandle,
+  roomRotationHandlePoint,
+  rotateRoomFromScreenDrag,
+} from '../../features/room/rotation';
 import { hitTestRoom } from '../../features/room/hitTest';
 import { snapRoomPoint } from '../../features/room/snap';
 import { layoutObjectFromPaletteItem } from '../../features/object/catalog';
+import {
+  objectArrayCenters,
+  objectArrayFootprint,
+  type ObjectArrayOptions,
+} from '../../features/object/array';
 import {
   copySelectedObjects,
   deleteSelectedObjects,
@@ -38,6 +48,7 @@ import { snapObjectPlacement } from '../../features/object/snap';
 import { snapObjectMove, type ObjectMoveSnap } from '../../features/object/moveSnap';
 import { objectsInSelectionRect, selectionRectBetween } from '../../features/object/selection';
 import { redoEditorCommand, undoEditorCommand } from '../../features/history/actions';
+import { floorConnectionLabel } from '../../features/floor/connection';
 import {
   isSpaceActivationTarget,
   isTypingTarget,
@@ -96,7 +107,15 @@ function RoomAreaLabel({
   );
 }
 
-export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
+export function EditorCanvas({
+  areaUnit,
+  overlayFloorId,
+  objectArray,
+}: {
+  areaUnit: AreaUnit;
+  overlayFloorId?: string | null;
+  objectArray: ObjectArrayOptions;
+}) {
   const viewport = useEditorStore((state) => state.viewport);
   const setViewport = useEditorStore((state) => state.setViewport);
   const tool = useEditorStore((state) => state.tool);
@@ -130,13 +149,16 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const setGeometryError = useEditorStore((state) => state.setGeometryError);
   const activeFloorId = useEditorStore((state) => state.activeFloorId);
   const floor = useProjectStore((state) => state.floorsById[activeFloorId ?? '']);
+  const floorsById = useProjectStore((state) => state.floorsById);
+  const selectedOverlayFloor = useProjectStore((state) => state.floorsById[overlayFloorId ?? '']);
+  const overlayFloor = overlayFloorId !== activeFloorId ? selectedOverlayFloor : undefined;
   const roomsById = useProjectStore((state) => state.roomsById);
   const objectsById = useProjectStore((state) => state.objectsById);
   const selectedPaletteItem = useProjectStore(
     (state) => state.paletteItemsById[selectedPaletteItemId ?? ''],
   );
   const createRoom = useProjectStore((state) => state.createRoom);
-  const createLayoutObject = useProjectStore((state) => state.createLayoutObject);
+  const createLayoutObjectArray = useProjectStore((state) => state.createLayoutObjectArray);
   const updateLayoutObject = useProjectStore((state) => state.updateLayoutObject);
   const moveLayoutObjects = useProjectStore((state) => state.moveLayoutObjects);
   const splitRoom = useProjectStore((state) => state.splitRoom);
@@ -153,6 +175,12 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     valid: boolean;
   } | null>(null);
   const roomDrag = useRef<{
+    pointerId: number;
+    roomId: string;
+    startPoint: Point;
+    originalVertices: Point[];
+  } | null>(null);
+  const roomRotate = useRef<{
     pointerId: number;
     roomId: string;
     startPoint: Point;
@@ -188,6 +216,7 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const [dragging, setDragging] = useState(false);
   const [movingVertex, setMovingVertex] = useState(false);
   const [movingRoom, setMovingRoom] = useState(false);
+  const [rotatingRoom, setRotatingRoom] = useState(false);
   const [resizingObject, setResizingObject] = useState(false);
   const [movingObject, setMovingObject] = useState(false);
   const [marqueeRect, setMarqueeRect] = useState<{ start: Point; current: Point } | null>(null);
@@ -198,11 +227,25 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
   const [hoveredObjectRotateHandle, setHoveredObjectRotateHandle] = useState(false);
   const [hoveredEditVertex, setHoveredEditVertex] = useState(false);
   const [hoveredRoomInterior, setHoveredRoomInterior] = useState(false);
+  const [hoveredRoomRotateHandle, setHoveredRoomRotateHandle] = useState(false);
   const [roomError, setRoomError] = useState<string | null>(null);
   const rooms = (floor?.roomIds ?? []).map((id) => roomsById[id]).filter((room) => room != null);
   const objects = (floor?.objectIds ?? [])
     .map((id) => objectsById[id])
     .filter((object) => object != null);
+  const overlayRooms = (overlayFloor?.roomIds ?? [])
+    .map((id) => roomsById[id])
+    .filter((room) => room != null);
+  const overlayObjects = (overlayFloor?.objectIds ?? [])
+    .map((id) => objectsById[id])
+    .filter(
+      (object) =>
+        object != null &&
+        (!object.floorConnectionId ||
+          !objects.some(
+            (activeObject) => activeObject.floorConnectionId === object.floorConnectionId,
+          )),
+    );
   const displayedObjects = objects.map(
     (object) =>
       objectMovePreviewById?.[object.id] ??
@@ -228,6 +271,9 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     roomEditPreview?.roomId === room.id ? { ...room, vertices: roomEditPreview.vertices } : room,
   );
   const selectedRoom = displayedRooms.find((room) => room.id === selectedRoomId);
+  const selectedRoomRotationHandle = selectedRoom
+    ? roomRotationHandlePoint(selectedRoom.vertices, viewport)
+    : null;
   const selectedWall =
     selectedRoom && selectedWallIndex !== null
       ? getWallSegments(selectedRoom.vertices, true)[selectedWallIndex]
@@ -302,31 +348,45 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     : (roomSnap?.world ?? divisionSnap?.world ?? divisionInteriorSnap?.world ?? cursorWorld);
   const placementSnap =
     tool === 'object' && selectedPaletteItem && !spacePressed && !dragging && hoverPoint !== null
-      ? snapObjectPlacement(hoverPoint, viewport, objects, objectPlacement)
+      ? snapObjectPlacement(
+          hoverPoint,
+          viewport,
+          objects,
+          objectArrayFootprint(objectPlacement, objectArray),
+          rooms,
+        )
       : null;
   const placementCenter = placementSnap?.center ?? null;
   const placementScreen = placementCenter ? worldToScreen(placementCenter, viewport) : null;
-  const objectPreview =
+  const objectPreviews =
     placementCenter && selectedPaletteItem
-      ? layoutObjectFromPaletteItem(
-          activeFloorId ?? '',
-          selectedPaletteItem,
-          placementCenter,
-          'preview',
-          objectPlacement,
+      ? objectArrayCenters(placementCenter, objectPlacement, objectArray).map((center, index) =>
+          layoutObjectFromPaletteItem(
+            activeFloorId ?? '',
+            selectedPaletteItem,
+            center,
+            `preview-${index}`,
+            objectPlacement,
+          ),
         )
-      : null;
-  const placementHint = placementSnap?.gapGuide
-    ? `같은 간격 ${Number(placementSnap.gapGuide.meters.toFixed(2))}m`
-    : placementSnap?.horizontalReference && placementSnap.verticalReference
-      ? '가로·세로 정렬'
-      : placementSnap?.horizontalReference
-        ? '가로 정렬'
-        : placementSnap?.verticalReference
-          ? '세로 정렬'
-          : placementSnap?.grid
-            ? '격자에 맞춤'
-            : '클릭하여 배치';
+      : [];
+  const placementSnapHint = placementSnap?.roomBoundary
+    ? '공간 경계에 맞춤'
+    : placementSnap?.gapGuide
+      ? `같은 간격 ${Number(placementSnap.gapGuide.meters.toFixed(2))}m`
+      : placementSnap?.horizontalReference && placementSnap.verticalReference
+        ? '가로·세로 정렬'
+        : placementSnap?.horizontalReference
+          ? '가로 정렬'
+          : placementSnap?.verticalReference
+            ? '세로 정렬'
+            : placementSnap?.grid
+              ? '격자에 맞춤'
+              : '클릭하여 배치';
+  const placementHint =
+    objectArray.columns * objectArray.rows > 1
+      ? `${objectArray.columns * objectArray.rows}개 · ${placementSnapHint}`
+      : placementSnapHint;
 
   function localPoint(event: {
     clientX: number;
@@ -419,6 +479,26 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
         setResizingObject(true);
         return;
       }
+      if (
+        !event.shiftKey &&
+        selectedRoom &&
+        isNearRoomRotationHandle(
+          selectedRoom.vertices,
+          point,
+          viewport,
+          event.pointerType === 'touch' ? 18 : 11,
+        )
+      ) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        roomRotate.current = {
+          pointerId: event.pointerId,
+          roomId: selectedRoom.id,
+          startPoint: point,
+          originalVertices: roomsById[selectedRoom.id].vertices,
+        };
+        setRotatingRoom(true);
+        return;
+      }
       const objectHit = hitTestLayoutObject(objects, point, viewport);
       if (objectHit) {
         if (event.shiftKey) {
@@ -489,6 +569,7 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     const currentDrag = drag.current;
     const currentVertexDrag = vertexDrag.current;
     const currentRoomDrag = roomDrag.current;
+    const currentRoomRotate = roomRotate.current;
     const currentObjectResize = objectResize.current;
     const currentObjectMove = objectMove.current;
     const currentObjectRotate = objectRotate.current;
@@ -511,6 +592,16 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
           viewport,
         ),
       );
+    } else if (currentRoomRotate?.pointerId === event.pointerId) {
+      setRoomEditPreview({
+        roomId: currentRoomRotate.roomId,
+        vertices: rotateRoomFromScreenDrag(
+          currentRoomRotate.originalVertices,
+          currentRoomRotate.startPoint,
+          point,
+          viewport,
+        ),
+      });
     } else if (currentObjectMove?.pointerId === event.pointerId) {
       if (
         Math.hypot(
@@ -590,12 +681,17 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
         selectedObject !== undefined &&
         !selectedObject.locked &&
         isNearObjectRotationHandle(selectedObject, point, viewport);
+      const nearRoomRotateHandle =
+        tool === 'select' &&
+        selectedRoom !== undefined &&
+        isNearRoomRotationHandle(selectedRoom.vertices, point, viewport);
       const objectHit = tool === 'select' ? hitTestLayoutObject(objects, point, viewport) : null;
       setHoveredObjectHandle(nearHandle);
       setHoveredObjectRotateHandle(nearRotateHandle);
+      setHoveredRoomRotateHandle(nearRoomRotateHandle);
       setHoveredObject(objectHit !== null && !objectHit.locked);
       const hoveredHit =
-        tool === 'select' && !objectHit && !nearHandle && !nearRotateHandle
+        tool === 'select' && !objectHit && !nearHandle && !nearRotateHandle && !nearRoomRotateHandle
           ? hitTestRoom(rooms, point, viewport)
           : null;
       setHoveredEditVertex(hoveredHit?.kind === 'vertex');
@@ -677,6 +773,24 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       }
       return;
     }
+    if (roomRotate.current?.pointerId === event.pointerId) {
+      const edit = roomRotate.current;
+      roomRotate.current = null;
+      setRotatingRoom(false);
+      setRoomEditPreview(null);
+      setGeometryError(
+        updateRoomVertices(
+          edit.roomId,
+          rotateRoomFromScreenDrag(
+            edit.originalVertices,
+            edit.startPoint,
+            localPoint(event),
+            viewport,
+          ),
+        ),
+      );
+      return;
+    }
     if (roomDrag.current?.pointerId === event.pointerId) {
       const edit = roomDrag.current;
       roomDrag.current = null;
@@ -726,10 +840,22 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       return;
     if (tool === 'object') {
       if (!selectedPaletteItemId || !selectedPaletteItem) return;
-      const center = snapObjectPlacement(point, viewport, objects, objectPlacement).center;
+      const center = snapObjectPlacement(
+        point,
+        viewport,
+        objects,
+        objectArrayFootprint(objectPlacement, objectArray),
+        rooms,
+      ).center;
       if (
         !activeFloorId ||
-        !createLayoutObject(activeFloorId, selectedPaletteItemId, center, objectPlacement)
+        !createLayoutObjectArray(
+          activeFloorId,
+          selectedPaletteItemId,
+          objectArrayCenters(center, objectPlacement, objectArray),
+          objectPlacement,
+          objectArray,
+        )
       ) {
         setRoomError('가구를 배치할 수 없습니다. 현재 층을 확인해 주세요.');
       } else {
@@ -832,6 +958,11 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
       setRoomEditPreview(null);
       setMovingRoom(false);
     }
+    if (roomRotate.current) {
+      roomRotate.current = null;
+      setRoomEditPreview(null);
+      setRotatingRoom(false);
+    }
     if (objectResize.current) {
       objectResize.current = null;
       setObjectEditPreview(null);
@@ -881,6 +1012,7 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
         drag.current ||
         vertexDrag.current ||
         roomDrag.current ||
+        roomRotate.current ||
         objectResize.current ||
         objectMove.current ||
         objectRotate.current ||
@@ -973,7 +1105,7 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
     <div className={styles.wrapper}>
       <div
         aria-label="도면 편집 영역"
-        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${tool === 'object' && !selectedPaletteItem && !spacePressed ? styles.objectIdle : ''} ${snapCuePoint ? styles.snapReady : ''} ${tool === 'select' && !spacePressed ? styles.select : ''} ${movingVertex || (!spacePressed && tool === 'select' && hoveredEditVertex) ? styles.vertexDragging : ''} ${movingRoom ? styles.roomDragging : !movingVertex && !spacePressed && tool === 'select' && hoveredRoomInterior ? styles.roomReady : ''} ${!spacePressed && tool === 'select' && hoveredObject ? styles.objectHover : ''} ${movingObject ? styles.objectMoving : ''} ${resizingObject || (!spacePressed && tool === 'select' && hoveredObjectHandle) ? styles.objectResizeCursor : ''} ${rotatingObject || (!spacePressed && tool === 'select' && hoveredObjectRotateHandle) ? styles.objectRotateCursor : ''} ${marqueeRect ? styles.marqueeSelecting : ''}`}
+        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${tool === 'object' && !selectedPaletteItem && !spacePressed ? styles.objectIdle : ''} ${snapCuePoint ? styles.snapReady : ''} ${tool === 'select' && !spacePressed ? styles.select : ''} ${movingVertex || (!spacePressed && tool === 'select' && hoveredEditVertex) ? styles.vertexDragging : ''} ${movingRoom ? styles.roomDragging : !movingVertex && !spacePressed && tool === 'select' && hoveredRoomInterior ? styles.roomReady : ''} ${!spacePressed && tool === 'select' && hoveredObject ? styles.objectHover : ''} ${movingObject ? styles.objectMoving : ''} ${resizingObject || (!spacePressed && tool === 'select' && hoveredObjectHandle) ? styles.objectResizeCursor : ''} ${rotatingObject || rotatingRoom || (!spacePressed && tool === 'select' && (hoveredObjectRotateHandle || hoveredRoomRotateHandle)) ? styles.objectRotateCursor : ''} ${marqueeRect ? styles.marqueeSelecting : ''}`}
         onWheel={handleWheel}
         onContextMenu={(event) => {
           if (tool !== 'object') return;
@@ -989,6 +1121,7 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
           setHoverPoint(null);
           setHoveredEditVertex(false);
           setHoveredRoomInterior(false);
+          setHoveredRoomRotateHandle(false);
           setHoveredObject(false);
           setHoveredObjectHandle(false);
           setHoveredObjectRotateHandle(false);
@@ -1018,8 +1151,37 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
               ))}
             </g>
           ))}
+          {overlayFloor && (
+            <g className={styles.floorOverlay}>
+              {overlayRooms.map((room) => (
+                <polygon
+                  key={room.id}
+                  className={styles.overlayRoom}
+                  points={room.vertices
+                    .map((vertex) => worldToScreen(vertex, viewport))
+                    .map((vertex) => `${vertex.x},${vertex.y}`)
+                    .join(' ')}
+                />
+              ))}
+              <g className={styles.overlayObjects}>
+                {overlayObjects.map((object) => (
+                  <LayoutObjectShape
+                    key={object.id}
+                    object={object}
+                    viewport={viewport}
+                    connectionLabel={floorConnectionLabel(object, floorsById)}
+                  />
+                ))}
+              </g>
+            </g>
+          )}
           {displayedObjects.map((object) => (
-            <LayoutObjectShape key={object.id} object={object} viewport={viewport} />
+            <LayoutObjectShape
+              key={object.id}
+              object={object}
+              viewport={viewport}
+              connectionLabel={floorConnectionLabel(object, floorsById)}
+            />
           ))}
           {tool === 'select' &&
             selectedObjectIds.length > 1 &&
@@ -1140,8 +1302,8 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
                       return (
                         <g key={index}>
                           <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} />
-                          {b.x - a.x >= 42 && (
-                            <text x={(a.x + b.x) / 2} y={a.y - 5} textAnchor="middle">
+                          {Math.hypot(b.x - a.x, b.y - a.y) >= 42 && (
+                            <text x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 5} textAnchor="middle">
                               {Number(placementSnap.gapGuide!.meters.toFixed(2))}m
                             </text>
                           )}
@@ -1153,11 +1315,24 @@ export function EditorCanvas({ areaUnit }: { areaUnit: AreaUnit }) {
               )}
             </g>
           )}
-          {objectPreview && (
-            <LayoutObjectShape object={objectPreview} viewport={viewport} preview />
-          )}
-          {tool === 'select' && selectedRoom && (
+          {objectPreviews.map((object) => (
+            <LayoutObjectShape key={object.id} object={object} viewport={viewport} preview />
+          ))}
+          {tool === 'select' && selectedRoom && selectedRoomRotationHandle && (
             <g>
+              <line
+                className={styles.roomRotationStem}
+                x1={selectedRoomRotationHandle.x}
+                y1={selectedRoomRotationHandle.y + 26}
+                x2={selectedRoomRotationHandle.x}
+                y2={selectedRoomRotationHandle.y}
+              />
+              <circle
+                className={styles.roomRotationHandle}
+                cx={selectedRoomRotationHandle.x}
+                cy={selectedRoomRotationHandle.y}
+                r={7}
+              />
               {selectedWall && (
                 <line
                   className={styles.selectedWall}

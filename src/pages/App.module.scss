@@ -195,6 +195,69 @@
   margin-right: 6px;
   background: #526fe1;
 }
+.placementMode {
+  display: flex;
+  gap: 3px;
+  width: 100%;
+  margin: 8px 0 10px;
+  padding: 3px;
+  border: 1px solid #dce2ec;
+  border-radius: 9px;
+  background: #fff;
+  button {
+    flex: 1;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #52617b;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  button[aria-pressed='true'] {
+    background: #526fe1;
+    color: #fff;
+  }
+  button:focus-visible {
+    outline: 2px solid #526fe1;
+    outline-offset: 2px;
+  }
+}
+.shortcutHelp {
+  position: relative;
+  z-index: 20;
+}
+.subheader .shortcutHelpButton {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  color: #3955bd;
+  font-size: 15px;
+  font-weight: 800;
+}
+.shortcutPopover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  display: none;
+  width: min(300px, calc(100vw - 24px));
+  max-height: min(70vh, 540px);
+  padding: 14px;
+  overflow-y: auto;
+  border: 1px solid #cdd5ef;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgb(25 39 69 / 18%);
+  font-weight: 400;
+}
+.shortcutHelp:hover .shortcutPopover,
+.shortcutHelp:focus-within .shortcutPopover {
+  display: block;
+}
 .muted {
   color: #94a0b2;
   font-weight: 400;
@@ -217,9 +280,7 @@
   border-top: 1px solid #e8ebf1;
 }
 .objectPalette {
-  margin-top: 22px;
-  padding-top: 18px;
-  border-top: 1px solid #e8ebf1;
+  margin-top: 0;
   h3 {
     margin: 0;
     color: #293850;
@@ -231,11 +292,53 @@
     font-size: 11px;
     line-height: 1.5;
   }
+  .paletteAddButton {
+    margin: 0 0 12px;
+  }
+}
+.contextHint {
+  margin: 14px 0 0;
+  padding: 11px;
+  border-radius: 8px;
+  background: #f4f6fc;
+  color: #52617b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.placementDetails {
+  margin-top: 12px;
+  summary {
+    padding: 8px 0;
+    color: #3955bd;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .objectAppearance {
+    padding-top: 8px;
+  }
 }
 .presetList {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  max-height: 205px;
+  overflow-y: auto;
+}
+.paletteSearch {
+  width: 100%;
+  margin-bottom: 9px;
+  padding: 8px;
+  border: 1px solid #dce2ec;
+  border-radius: 8px;
+  background: #fff;
+  color: #293850;
+  font: inherit;
+  font-size: 12px;
+  &:focus-visible {
+    outline: 2px solid #526fe1;
+    outline-offset: 2px;
+  }
 }
 .presetButton {
   display: flex;
@@ -273,6 +376,18 @@
 }
 .presetName {
   font-size: 12px;
+  font-weight: 700;
+}
+.presetDetails {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+.connectorBadge {
+  color: #16845e;
+  font-size: 10px;
   font-weight: 700;
 }
 .presetSize {
@@ -330,6 +445,66 @@
     color: #293850;
     font: inherit;
     font-size: 12px;
+  }
+}
+.connectorOption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #293850;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  input {
+    accent-color: #16845e;
+  }
+}
+.paletteCreateForm .connectorHelp {
+  margin: -7px 0 0;
+  color: #718099;
+  font-size: 11px;
+}
+.connectionDetails {
+  color: #16845e !important;
+}
+.paletteSettings .connectorSettingHelp {
+  margin: 5px 0 12px;
+}
+.arraySettings {
+  margin-top: 10px;
+  .objectFieldLabel {
+    display: block;
+  }
+  p {
+    margin: 8px 0 0;
+    color: #718099;
+    font-size: 11px;
+  }
+}
+.arrayFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.arrayField {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: #718099;
+  font-size: 11px;
+  input {
+    width: 100%;
+    padding: 7px;
+    border: 1px solid #dce2ec;
+    border-radius: 7px;
+    background: #fff;
+    color: #293850;
+    font: inherit;
+    font-size: 12px;
+    &:focus-visible {
+      outline: 2px solid #526fe1;
+      outline-offset: 2px;
+    }
   }
 }
 .paletteCreateActions {
@@ -661,6 +836,27 @@
     line-height: 1.5;
   }
 }
+.roomRotateActions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  button {
+    flex: 1;
+    padding: 7px;
+    border: 1px solid #a5d4c1;
+    border-radius: 7px;
+    background: #f3faf6;
+    color: #16845e;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    &:focus-visible {
+      outline: 2px solid #16845e;
+      outline-offset: 2px;
+    }
+  }
+}
 .wallButtons {
   display: flex;
   flex-wrap: wrap;
@@ -715,17 +911,8 @@
     color: #293850;
   }
 }
-.notice {
-  margin-top: 30px;
-  padding: 13px;
-  border-radius: 9px;
-  background: #f4f6fc;
-  color: #6b7890;
-  font-size: 12px;
-  line-height: 1.6;
-}
 .shortcuts {
-  margin-top: 36px;
+  margin-top: 0;
   display: flex;
   flex-direction: column;
   gap: 13px;

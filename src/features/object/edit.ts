@@ -1,4 +1,5 @@
 import type { LayoutObject, Point, Viewport } from '../../types/layout';
+import { snapRightAngle } from '../../domain/geometry/angles';
 import { MAX_OBJECT_SIZE_METERS, MIN_OBJECT_SIZE_METERS } from './catalog';
 
 export function objectCenter(object: LayoutObject): Point {
@@ -48,7 +49,7 @@ export function rotateObjectFromScreenDrag(
   const currentAngle = Math.atan2(current.y - screenCenter.y, current.x - screenCenter.x);
   return {
     ...object,
-    rotation: normalizeObjectRotation(
+    rotation: snapRightAngle(
       Math.round(object.rotation + ((currentAngle - startAngle) * 180) / Math.PI),
     ),
   };

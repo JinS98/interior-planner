@@ -104,6 +104,21 @@ describe('moving and rotating objects', () => {
     expect(objectCenter(rotated)).toEqual(center);
   });
 
+  it('snaps an object drag near a right angle to exactly 90 degrees', () => {
+    const center = objectCenter(object);
+    const screen = {
+      x: center.x * viewport.scale + viewport.x,
+      y: center.y * viewport.scale + viewport.y,
+    };
+    const rotated = rotateObjectFromScreenDrag(
+      { ...object, rotation: 0 },
+      { x: screen.x, y: screen.y - 100 },
+      { x: screen.x + 100, y: screen.y + 6 },
+      viewport,
+    );
+    expect(rotated.rotation).toBe(90);
+  });
+
   it('keeps the opposite corner fixed while resizing a rotated object', () => {
     const original = { ...object, rotation: 90 };
     const fixed = rotatePoint({ x: original.x, y: original.y }, objectCenter(original), 90);

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { LayoutObject, ObjectAppearance, PaletteItem, Point, Viewport } from '../types/layout';
 import type { RoomEditError } from '../features/room/edit';
 import { defaultObjectAppearance, isValidObjectAppearance } from '../features/object/catalog';
-import { LOCAL_FLOOR_ID, LOCAL_PROJECT_ID } from './projectStore';
+import { LOCAL_FLOOR_ID, LOCAL_PROJECT_ID, useProjectStore } from './projectStore';
 
 export type EditorTool = 'select' | 'room' | 'divide' | 'object' | 'pan';
 
@@ -24,6 +24,7 @@ interface EditorState {
   selectedWallIndex: number | null;
   roomEditPreview: { roomId: string; vertices: Point[] } | null;
   geometryError: RoomEditError | null;
+  setActiveFloor: (floorId: string) => boolean;
   setTool: (tool: EditorTool) => void;
   setPaletteItem: (item: PaletteItem) => void;
   clearPaletteItem: () => void;
@@ -69,6 +70,30 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectedWallIndex: null,
   roomEditPreview: null,
   geometryError: null,
+  setActiveFloor: (floorId) => {
+    const floor = useProjectStore.getState().floorsById[floorId];
+    let switched = false;
+    set((state) => {
+      if (!floor || floor.projectId !== state.activeProjectId) return state;
+      switched = true;
+      if (state.activeFloorId === floorId) return state;
+      return {
+        activeFloorId: floorId,
+        selectedObjectIds: [],
+        selectedRoomId: null,
+        selectedWallIndex: null,
+        roomDraftVertices: [],
+        divisionDraft: null,
+        objectEditPreview: null,
+        objectMovePreviewById: null,
+        roomEditPreview: null,
+        objectClipboard: [],
+        clipboardPasteCount: 0,
+        geometryError: null,
+      };
+    });
+    return switched;
+  },
   setTool: (tool) => set((state) => (state.tool === tool ? state : { tool, divisionDraft: null })),
   setPaletteItem: (item) =>
     set({

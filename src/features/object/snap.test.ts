@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { worldToScreen } from '../../domain/geometry/coordinates';
 import type { Viewport } from '../../types/layout';
 import { layoutObjectFromPaletteItem, layoutObjectFromPreset } from './catalog';
+import { objectArrayCenters, objectArrayFootprint } from './array';
 import { snapObjectPlacement } from './snap';
 
 const viewport: Viewport = { x: 0, y: 0, scale: 80 };
@@ -109,5 +110,100 @@ describe('snapObjectPlacement', () => {
     );
     expect(snap.center.x).toBeCloseTo(5.3);
     expect(snap.gapGuide?.meters).toBeCloseTo(1);
+  });
+
+  it('keeps the same outside gap when placing two objects together', () => {
+    const options = { columns: 2, rows: 1, gapX: 0.2, gapY: 0 };
+    const snap = snapObjectPlacement(
+      worldToScreen({ x: 5.08, y: 2.04 }, viewport),
+      viewport,
+      [desk, chair],
+      objectArrayFootprint(pcItem, options),
+    );
+    expect(snap.center.x).toBeCloseTo(5);
+    expect(snap.gapGuide?.meters).toBeCloseTo(1);
+    const first = pc(objectArrayCenters(snap.center, pcItem, options)[0], 'array-1');
+    expect(first.x - (chair.x + chair.width)).toBeCloseTo(1);
+  });
+
+  it('extends a column with equal spacing when placing one object', () => {
+    const bottom = layoutObjectFromPreset('floor-1', 'desk', { x: 1, y: 4 }, 'desk-2');
+    const snap = snapObjectPlacement(
+      worldToScreen({ x: 1.03, y: 5.99 }, viewport),
+      viewport,
+      [desk, bottom],
+      chair,
+    );
+    expect(snap.center.x).toBe(1);
+    expect(snap.center.y).toBeCloseTo(5.95);
+    expect(snap.gapGuide?.meters).toBeCloseTo(1.3);
+  });
+
+  it('keeps zero spacing after an adjacent two-object placement', () => {
+    const first = pc({ x: 1, y: 2 }, 'pc-1');
+    const second = pc({ x: 1.6, y: 2 }, 'pc-2');
+    const snap = snapObjectPlacement(
+      worldToScreen({ x: 2.27, y: 2.03 }, viewport),
+      viewport,
+      [first, second],
+      pcItem,
+    );
+    expect(snap.center.x).toBeCloseTo(2.2);
+    expect(snap.gapGuide?.meters).toBe(0);
+  });
+
+  it('snaps an object footprint to a room wall and corner before grid guides', () => {
+    const room = {
+      id: 'room-1',
+      floorId: 'floor-1',
+      name: '방',
+      vertices: [
+        { x: 0, y: 0 },
+        { x: 4, y: 0 },
+        { x: 4, y: 3 },
+        { x: 0, y: 3 },
+      ],
+    };
+    const wall = snapObjectPlacement(
+      worldToScreen({ x: 2, y: 0.48 }, viewport),
+      viewport,
+      [],
+      { width: 1, height: 1 },
+      [room],
+    );
+    expect(wall.roomBoundary).toBe(true);
+    expect(wall.center).toEqual({ x: 2, y: 0.5 });
+
+    const corner = snapObjectPlacement(
+      worldToScreen({ x: 0.02, y: 0.03 }, viewport),
+      viewport,
+      [],
+      { width: 1, height: 1 },
+      [room],
+    );
+    expect(corner.center).toEqual({ x: 0.5, y: 0.5 });
+  });
+
+  it('offsets the object inward from a diagonal wall', () => {
+    const room = {
+      id: 'diagonal-room',
+      floorId: 'floor-1',
+      name: '삼각형 방',
+      vertices: [
+        { x: 0, y: 0 },
+        { x: 4, y: 4 },
+        { x: 0, y: 4 },
+      ],
+    };
+    const snap = snapObjectPlacement(
+      worldToScreen({ x: 2, y: 2 }, viewport),
+      viewport,
+      [],
+      { width: 1, height: 1 },
+      [room],
+    );
+    expect(snap.roomBoundary).toBe(true);
+    expect(snap.center.x).toBeCloseTo(1.5);
+    expect(snap.center.y).toBeCloseTo(2.5);
   });
 });

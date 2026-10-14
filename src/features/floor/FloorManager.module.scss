@@ -1,0 +1,161 @@
+.panel {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e8ebf1;
+}
+
+.heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  h3 {
+    margin: 0;
+    color: #293850;
+    font-size: 13px;
+  }
+  span {
+    color: #8996aa;
+    font-size: 11px;
+  }
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.row {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.floorButton,
+.actionButton,
+.formActions button {
+  border: 1px solid #dce2ec;
+  border-radius: 7px;
+  background: #fff;
+  color: #33415e;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.floorButton {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  font-weight: 700;
+  white-space: nowrap;
+  &[aria-pressed='true'] {
+    border-color: #8295ec;
+    background: #f2f5ff;
+    color: #3955bd;
+  }
+}
+
+.actionButton {
+  flex: none;
+  padding: 7px 5px;
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+}
+
+.form,
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px solid #dce2ec;
+  border-radius: 8px;
+  color: #52617b;
+  font-size: 11px;
+  label {
+    font-weight: 700;
+  }
+  input {
+    min-width: 0;
+    padding: 7px;
+    border: 1px solid #dce2ec;
+    border-radius: 6px;
+    font: inherit;
+  }
+  p {
+    margin: 0;
+    line-height: 1.5;
+  }
+}
+
+.formActions {
+  display: flex;
+  gap: 6px;
+  button {
+    flex: 1;
+    padding: 7px;
+  }
+  button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .dangerButton {
+    border-color: #efc4c9;
+    background: #fff7f8;
+    color: #a92739;
+  }
+}
+
+.addButton {
+  width: 100%;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px dashed #9caadd;
+  border-radius: 8px;
+  background: #f8faff;
+  color: #3955bd;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.copyOption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  color: #52617b;
+  cursor: pointer;
+  font-size: 11px;
+  input {
+    accent-color: #526fe1;
+  }
+}
+.connectionNote {
+  margin: 5px 0 0;
+  color: #718099;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.error {
+  margin: 8px 0 0;
+  color: #b42332;
+  font-size: 11px;
+}
+
+.panel button:focus-visible,
+.panel input:focus-visible {
+  outline: 2px solid #526fe1;
+  outline-offset: 2px;
+}

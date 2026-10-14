@@ -3,6 +3,16 @@ import { useProjectStore } from '../../store/projectStore';
 
 function reconcileSelection() {
   const project = useProjectStore.getState();
+  const current = useEditorStore.getState();
+  const activeProject = project.projectsById[current.activeProjectId ?? ''];
+  if (
+    !current.activeFloorId ||
+    !activeProject?.floorIds.includes(current.activeFloorId) ||
+    !project.floorsById[current.activeFloorId]
+  ) {
+    const fallbackId = activeProject?.floorIds.find((id) => project.floorsById[id]);
+    if (fallbackId) current.setActiveFloor(fallbackId);
+  }
   const editor = useEditorStore.getState();
   const objectIds = editor.selectedObjectIds.filter(
     (id) => project.objectsById[id]?.floorId === editor.activeFloorId,

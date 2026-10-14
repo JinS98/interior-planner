@@ -125,6 +125,19 @@
     stroke-width: 3;
     stroke-linejoin: round;
   }
+  .floorOverlay {
+    pointer-events: none;
+  }
+  .overlayRoom {
+    fill: rgb(22 132 94 / 9%);
+    stroke: rgb(22 132 94 / 80%);
+    stroke-width: 3;
+    stroke-dasharray: 9 6;
+    stroke-linejoin: round;
+  }
+  .overlayObjects {
+    opacity: 0.4;
+  }
   .selectedRoom {
     fill: rgb(82 111 225 / 24%);
     stroke: #334bc2;
@@ -136,6 +149,15 @@
   .editVertex {
     fill: #fff;
     stroke: #e2952a;
+    stroke-width: 3;
+  }
+  .roomRotationStem {
+    stroke: #16845e;
+    stroke-width: 2;
+  }
+  .roomRotationHandle {
+    fill: #fff;
+    stroke: #16845e;
     stroke-width: 3;
   }
   .wallLength {
@@ -160,6 +182,18 @@
       stroke: #40516b;
       stroke-width: 2;
     }
+  }
+  .floorConnector .objectBody {
+    stroke: #16845e;
+    stroke-width: 3;
+  }
+  .floorConnectionLabel {
+    fill: #16845e;
+    stroke: #fff;
+    stroke-width: 4px;
+    paint-order: stroke;
+    font-size: 12px;
+    font-weight: 700;
   }
   .lockedObject .objectBody {
     stroke: #6c7482;

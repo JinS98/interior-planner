@@ -1,12 +1,19 @@
 import { create } from 'zustand';
 import { validatePolygon } from '../domain/geometry/polygonValidation';
+import { snapRightAngle } from '../domain/geometry/angles';
 import { splitPolygon } from '../domain/geometry/polygonSplit';
 import {
   createDefaultPaletteItems,
   isValidObjectAppearance,
   layoutObjectFromPaletteItem,
 } from '../features/object/catalog';
+import { isValidObjectArray, type ObjectArrayOptions } from '../features/object/array';
 import { normalizeObjectRotation } from '../features/object/edit';
+import {
+  connectedObjects,
+  floorConnectionLinks,
+  refreshFloorConnectionLinks,
+} from '../features/floor/connection';
 import { HISTORY_LIMIT, projectSnapshot, type EditCommand } from '../features/history/command';
 import type { RoomEditError } from '../features/room/edit';
 import type {
@@ -59,16 +66,31 @@ export interface ProjectState {
       'projectsById' | 'floorsById' | 'roomsById' | 'objectsById' | 'paletteItemsById'
     >,
   ) => void;
+  createFloor: (
+    projectId: string,
+    options?: { sourceFloorId?: string; copyObjects?: boolean },
+  ) => Floor | null;
+  renameFloor: (floorId: string, name: string) => boolean;
+  deleteFloor: (floorId: string) => boolean;
   addPaletteItem: (
     projectId: string,
-    input: Pick<PaletteItem, 'name' | 'category' | 'width' | 'height' | 'color' | 'shape'>,
+    input: Pick<PaletteItem, 'name' | 'category' | 'width' | 'height' | 'color' | 'shape'> &
+      Pick<PaletteItem, 'floorConnector'>,
   ) => PaletteItem | null;
+  setPaletteItemFloorConnector: (itemId: string, floorConnector: boolean) => boolean;
   createRoom: (floorId: string, vertices: Point[]) => boolean;
   createLayoutObject: (
     floorId: string,
     paletteItemId: string,
     center: Point,
     appearance?: ObjectAppearance,
+  ) => boolean;
+  createLayoutObjectArray: (
+    floorId: string,
+    paletteItemId: string,
+    centers: Point[],
+    appearance: ObjectAppearance,
+    options: ObjectArrayOptions,
   ) => boolean;
   updateLayoutObject: (
     objectId: string,
@@ -91,7 +113,7 @@ export interface ProjectState {
 }
 
 /** 향후 Firestore 저장 스냅샷의 원본. 그리기 중인 점은 여기에 넣지 않는다. */
-export const useProjectStore = create<ProjectState>((set) => {
+export const useProjectStore = create<ProjectState>((set, get) => {
   const commit = (
     label: string,
     update: (state: ProjectState) => Partial<ProjectState> | ProjectState,
@@ -148,6 +170,144 @@ export const useProjectStore = create<ProjectState>((set) => {
       });
       return redone;
     },
+    createFloor: (projectId, options) => {
+      let created: Floor | null = null;
+      commit('층 추가', (state) => {
+        const project = state.projectsById[projectId];
+        if (!project) return state;
+        const source = options?.sourceFloorId ? state.floorsById[options.sourceFloorId] : null;
+        if (options?.sourceFloorId && (!source || source.projectId !== projectId)) return state;
+        const existingNames = new Set(
+          project.floorIds.map((id) => state.floorsById[id]?.name.toLowerCase()),
+        );
+        let number = 2;
+        while (existingNames.has(`${number}f`)) number += 1;
+        const floorId = crypto.randomUUID();
+        const rooms = (source?.roomIds ?? [])
+          .map((id) => state.roomsById[id])
+          .filter((room) => room)
+          .map((room) => ({
+            ...room,
+            id: crypto.randomUUID(),
+            floorId,
+            vertices: room.vertices.map((vertex) => ({ ...vertex })),
+          }));
+        const copiedObjects = (options?.copyObjects ? (source?.objectIds ?? []) : [])
+          .map((id) => state.objectsById[id])
+          .filter((object) => object && !object.floorConnectionId)
+          .map((object) => ({ ...object, id: crypto.randomUUID(), floorId }));
+        const seenConnections = new Set<string>();
+        const connectedObjectsToCopy = project.floorIds
+          .flatMap((id) => state.floorsById[id]?.objectIds ?? [])
+          .map((id) => state.objectsById[id])
+          .filter((object) => {
+            if (!object?.floorConnectionId || seenConnections.has(object.floorConnectionId))
+              return false;
+            seenConnections.add(object.floorConnectionId);
+            return true;
+          })
+          .map((object) => ({ ...object, id: crypto.randomUUID(), floorId }));
+        const objects = [...copiedObjects, ...connectedObjectsToCopy];
+        const nextProject: Project = {
+          ...project,
+          floorIds: [...project.floorIds, floorId],
+          updatedAt: new Date().toISOString(),
+        };
+        const floor: Floor = {
+          id: floorId,
+          projectId,
+          name: `${number}F`,
+          roomIds: rooms.map((room) => room.id),
+          objectIds: objects.map((object) => object.id),
+        };
+        created = floor;
+        const floorsById = { ...state.floorsById, [floor.id]: floor };
+        const objectsById = refreshFloorConnectionLinks(nextProject, floorsById, {
+          ...state.objectsById,
+          ...Object.fromEntries(objects.map((object) => [object.id, object])),
+        });
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [projectId]: nextProject,
+          },
+          floorsById,
+          roomsById: {
+            ...state.roomsById,
+            ...Object.fromEntries(rooms.map((room) => [room.id, room])),
+          },
+          objectsById,
+        };
+      });
+      return created;
+    },
+    renameFloor: (floorId, input) => {
+      const name = input.trim();
+      if (!name || name.length > 40) return false;
+      let renamed = false;
+      commit('층 이름 변경', (state) => {
+        const floor = state.floorsById[floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!floor || !project) return state;
+        if (
+          project.floorIds.some(
+            (id) =>
+              id !== floorId && state.floorsById[id]?.name.toLowerCase() === name.toLowerCase(),
+          )
+        )
+          return state;
+        renamed = true;
+        if (floor.name === name) return state;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          floorsById: { ...state.floorsById, [floorId]: { ...floor, name } },
+        };
+      });
+      return renamed;
+    },
+    deleteFloor: (floorId) => {
+      let deleted = false;
+      commit('층 삭제', (state) => {
+        const floor = state.floorsById[floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (
+          !floor ||
+          !project ||
+          !project.floorIds.includes(floorId) ||
+          project.floorIds.length <= 1
+        )
+          return state;
+        const floorsById = { ...state.floorsById };
+        delete floorsById[floorId];
+        const nextProject: Project = {
+          ...project,
+          floorIds: project.floorIds.filter((id) => id !== floorId),
+          updatedAt: new Date().toISOString(),
+        };
+        deleted = true;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: nextProject,
+          },
+          floorsById,
+          roomsById: Object.fromEntries(
+            Object.entries(state.roomsById).filter(([, room]) => room.floorId !== floorId),
+          ),
+          objectsById: refreshFloorConnectionLinks(
+            nextProject,
+            floorsById,
+            Object.fromEntries(
+              Object.entries(state.objectsById).filter(([, object]) => object.floorId !== floorId),
+            ),
+          ),
+        };
+      });
+      return deleted;
+    },
     addPaletteItem: (projectId, input) => {
       const name = input.name.trim();
       if (
@@ -183,6 +343,27 @@ export const useProjectStore = create<ProjectState>((set) => {
       });
       return created;
     },
+    setPaletteItemFloorConnector: (itemId, floorConnector) => {
+      let updated = false;
+      commit('물품 층 연결 설정', (state) => {
+        const item = state.paletteItemsById[itemId];
+        const project = item && state.projectsById[item.projectId];
+        if (!item || !project || !project.paletteItemIds.includes(itemId)) return state;
+        updated = true;
+        if (Boolean(item.floorConnector) === floorConnector) return state;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          paletteItemsById: {
+            ...state.paletteItemsById,
+            [itemId]: { ...item, floorConnector },
+          },
+        };
+      });
+      return updated;
+    },
     createRoom: (floorId, vertices) => {
       if (validatePolygon(vertices)) return false;
       let created = false;
@@ -213,33 +394,64 @@ export const useProjectStore = create<ProjectState>((set) => {
       return created;
     },
     createLayoutObject: (floorId, paletteItemId, center, appearance) => {
-      if (!Number.isFinite(center.x) || !Number.isFinite(center.y)) return false;
+      const item = get().paletteItemsById[paletteItemId];
+      if (!item) return false;
+      return get().createLayoutObjectArray(floorId, paletteItemId, [center], appearance ?? item, {
+        columns: 1,
+        rows: 1,
+        gapX: 0,
+        gapY: 0,
+      });
+    },
+    createLayoutObjectArray: (floorId, paletteItemId, centers, appearance, options) => {
+      if (
+        !isValidObjectArray(options) ||
+        centers.length !== options.columns * options.rows ||
+        centers.some((center) => !Number.isFinite(center.x) || !Number.isFinite(center.y))
+      )
+        return false;
       let created = false;
-      commit('물품 배치', (state) => {
+      commit(centers.length > 1 ? '물품 배열 배치' : '물품 배치', (state) => {
         const floor = state.floorsById[floorId];
         const project = floor && state.projectsById[floor.projectId];
         const item = state.paletteItemsById[paletteItemId];
         if (!floor || !project || !item || item.projectId !== project.id) return state;
-        const selectedAppearance = appearance ?? item;
-        if (!isValidObjectAppearance(selectedAppearance)) return state;
-        const object = layoutObjectFromPaletteItem(
-          floorId,
-          item,
-          center,
-          crypto.randomUUID(),
-          selectedAppearance,
-        );
+        if (!isValidObjectAppearance(appearance)) return state;
+        const objects = centers.flatMap((center) => {
+          const connectionId = item.floorConnector ? crypto.randomUUID() : null;
+          const targetFloorIds = connectionId ? project.floorIds : [floorId];
+          return targetFloorIds.map((targetFloorId) => ({
+            ...layoutObjectFromPaletteItem(
+              targetFloorId,
+              item,
+              center,
+              crypto.randomUUID(),
+              appearance,
+            ),
+            ...(connectionId
+              ? { floorConnectionId: connectionId, ...floorConnectionLinks(project, targetFloorId) }
+              : {}),
+          }));
+        });
+        const floorsById = { ...state.floorsById };
+        for (const object of objects) {
+          const target = floorsById[object.floorId];
+          floorsById[object.floorId] = {
+            ...target,
+            objectIds: [...target.objectIds, object.id],
+          };
+        }
         created = true;
         return {
           projectsById: {
             ...state.projectsById,
             [project.id]: { ...project, updatedAt: new Date().toISOString() },
           },
-          floorsById: {
-            ...state.floorsById,
-            [floorId]: { ...floor, objectIds: [...floor.objectIds, object.id] },
+          floorsById,
+          objectsById: {
+            ...state.objectsById,
+            ...Object.fromEntries(objects.map((object) => [object.id, object])),
           },
-          objectsById: { ...state.objectsById, [object.id]: object },
         };
       });
       return created;
@@ -272,7 +484,7 @@ export const useProjectStore = create<ProjectState>((set) => {
           ...appearance,
           x,
           y,
-          rotation: normalizeObjectRotation(rotation),
+          rotation: snapRightAngle(normalizeObjectRotation(rotation)),
         };
         updated = true;
         if (
@@ -285,12 +497,22 @@ export const useProjectStore = create<ProjectState>((set) => {
           next.rotation === object.rotation
         )
           return state;
+        const objectsById = { ...state.objectsById };
+        for (const peer of connectedObjects(state.objectsById, [object])) {
+          objectsById[peer.id] = {
+            ...peer,
+            ...appearance,
+            x,
+            y,
+            rotation: next.rotation,
+          };
+        }
         return {
           projectsById: {
             ...state.projectsById,
             [project.id]: { ...project, updatedAt: new Date().toISOString() },
           },
-          objectsById: { ...state.objectsById, [objectId]: next },
+          objectsById,
         };
       });
       return updated;
@@ -303,9 +525,10 @@ export const useProjectStore = create<ProjectState>((set) => {
         const ids = [...new Set(objectIds)];
         const objects = ids.map((id) => state.objectsById[id]);
         if (objects.some((object) => !object)) return state;
-        if (objects.some((object) => object.locked)) return state;
+        const peers = connectedObjects(state.objectsById, objects);
+        if (peers.some((object) => object.locked)) return state;
         if (
-          objects.some(
+          peers.some(
             (object) =>
               !Number.isFinite(object.x + delta.x) || !Number.isFinite(object.y + delta.y),
           )
@@ -319,7 +542,7 @@ export const useProjectStore = create<ProjectState>((set) => {
         moved = true;
         if (delta.x === 0 && delta.y === 0) return state;
         const objectsById = { ...state.objectsById };
-        for (const object of objects) {
+        for (const object of peers) {
           objectsById[object.id] = { ...object, x: object.x + delta.x, y: object.y + delta.y };
         }
         return {
@@ -352,23 +575,37 @@ export const useProjectStore = create<ProjectState>((set) => {
         const project = floor && state.projectsById[floor.projectId];
         if (!floor || !project || sourceObjects.some((object) => object.floorId !== floorId))
           return state;
-        const duplicates = sourceObjects.map((object) => ({
-          ...object,
-          id: crypto.randomUUID(),
-          x: object.x + offset.x,
-          y: object.y + offset.y,
-          locked: false,
-        }));
-        createdIds = duplicates.map((object) => object.id);
+        const duplicates = sourceObjects.flatMap((object) => {
+          const connectionId = object.floorConnectionId ? crypto.randomUUID() : null;
+          return (connectionId ? project.floorIds : [floorId]).map((targetFloorId) => ({
+            ...object,
+            id: crypto.randomUUID(),
+            floorId: targetFloorId,
+            x: object.x + offset.x,
+            y: object.y + offset.y,
+            locked: false,
+            ...(connectionId
+              ? { floorConnectionId: connectionId, ...floorConnectionLinks(project, targetFloorId) }
+              : {}),
+          }));
+        });
+        createdIds = duplicates
+          .filter((object) => object.floorId === floorId)
+          .map((object) => object.id);
+        const floorsById = { ...state.floorsById };
+        for (const duplicate of duplicates) {
+          const target = floorsById[duplicate.floorId];
+          floorsById[duplicate.floorId] = {
+            ...target,
+            objectIds: [...target.objectIds, duplicate.id],
+          };
+        }
         return {
           projectsById: {
             ...state.projectsById,
             [project.id]: { ...project, updatedAt: new Date().toISOString() },
           },
-          floorsById: {
-            ...state.floorsById,
-            [floorId]: { ...floor, objectIds: [...floor.objectIds, ...createdIds] },
-          },
+          floorsById,
           objectsById: {
             ...state.objectsById,
             ...Object.fromEntries(duplicates.map((object) => [object.id, object])),
@@ -388,10 +625,11 @@ export const useProjectStore = create<ProjectState>((set) => {
         const floor = state.floorsById[floorId];
         const project = floor && state.projectsById[floor.projectId];
         if (!floor || !project) return state;
+        const peers = connectedObjects(state.objectsById, objects);
         updated = true;
-        if (objects.every((object) => object.locked === locked)) return state;
+        if (peers.every((object) => object.locked === locked)) return state;
         const objectsById = { ...state.objectsById };
-        for (const object of objects) objectsById[object.id] = { ...object, locked };
+        for (const object of peers) objectsById[object.id] = { ...object, locked };
         return {
           projectsById: {
             ...state.projectsById,
@@ -407,7 +645,12 @@ export const useProjectStore = create<ProjectState>((set) => {
       commit('물품 삭제', (state) => {
         const objects = [...new Set(objectIds)]
           .map((id) => state.objectsById[id])
-          .filter((object) => object && !object.locked);
+          .filter(
+            (object) =>
+              object &&
+              !object.locked &&
+              connectedObjects(state.objectsById, [object]).every((peer) => !peer.locked),
+          );
         if (objects.length === 0) return state;
         const floorId = objects[0].floorId;
         if (objects.some((object) => object.floorId !== floorId)) return state;
@@ -415,47 +658,30 @@ export const useProjectStore = create<ProjectState>((set) => {
         const project = floor && state.projectsById[floor.projectId];
         if (!floor || !project) return state;
         deletedIds = objects.map((object) => object.id);
-        const deletedSet = new Set(deletedIds);
+        const peers = connectedObjects(state.objectsById, objects);
+        const deletedSet = new Set(peers.map((object) => object.id));
         const objectsById = { ...state.objectsById };
-        for (const id of deletedIds) delete objectsById[id];
+        for (const id of deletedSet) delete objectsById[id];
+        const floorsById = { ...state.floorsById };
+        for (const peer of peers) {
+          const peerFloor = floorsById[peer.floorId];
+          floorsById[peer.floorId] = {
+            ...peerFloor,
+            objectIds: peerFloor.objectIds.filter((id) => !deletedSet.has(id)),
+          };
+        }
         return {
           projectsById: {
             ...state.projectsById,
             [project.id]: { ...project, updatedAt: new Date().toISOString() },
           },
-          floorsById: {
-            ...state.floorsById,
-            [floorId]: { ...floor, objectIds: floor.objectIds.filter((id) => !deletedSet.has(id)) },
-          },
+          floorsById,
           objectsById,
         };
       });
       return deletedIds;
     },
-    deleteLayoutObject: (objectId) => {
-      let deleted = false;
-      commit('물품 삭제', (state) => {
-        const object = state.objectsById[objectId];
-        const floor = object && state.floorsById[object.floorId];
-        const project = floor && state.projectsById[floor.projectId];
-        if (!object || !floor || !project || object.locked) return state;
-        const objectsById = { ...state.objectsById };
-        delete objectsById[objectId];
-        deleted = true;
-        return {
-          projectsById: {
-            ...state.projectsById,
-            [project.id]: { ...project, updatedAt: new Date().toISOString() },
-          },
-          floorsById: {
-            ...state.floorsById,
-            [floor.id]: { ...floor, objectIds: floor.objectIds.filter((id) => id !== objectId) },
-          },
-          objectsById,
-        };
-      });
-      return deleted;
-    },
+    deleteLayoutObject: (objectId) => get().deleteLayoutObjects([objectId]).length > 0,
     splitRoom: (roomId, path) => {
       let divided = false;
       commit('공간 분할', (state) => {

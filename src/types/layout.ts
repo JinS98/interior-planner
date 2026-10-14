@@ -43,6 +43,10 @@ export interface LayoutObject {
   shape: ObjectShape;
   rotation: number;
   locked: boolean;
+  /** 같은 수직 연결 물품의 층별 인스턴스를 묶는다. */
+  floorConnectionId?: string;
+  fromFloorId?: string | null;
+  toFloorId?: string | null;
 }
 
 export type ObjectAppearance = Pick<LayoutObject, 'width' | 'height' | 'color' | 'shape'>;
@@ -54,6 +58,7 @@ export interface PaletteItem extends ObjectAppearance {
   name: string;
   category: LayoutObject['category'];
   builtIn: boolean;
+  floorConnector?: boolean;
 }
 
 export interface Project {

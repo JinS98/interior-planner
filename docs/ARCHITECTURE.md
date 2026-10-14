@@ -12,8 +12,8 @@
 | `src/features/room`         | 공간 그리기·수정 UI 및 작업 흐름               | 2~3일차               |
 | `src/features/object`       | 오브젝트 Palette·변형·Inspector                | 4일차                 |
 | `src/features/history`      | Command 실행·Undo/Redo                         | 5일차                 |
-| `src/services`              | Firebase 인증·Repository, DTO 변환             | 6일차                 |
-| `src/features/floor`        | 층 전환·오버레이·연결                          | 8일차                 |
+| `src/services`              | Firebase 인증·Repository, DTO 변환             | 7일차                 |
+| `src/features/floor`        | 층 전환·오버레이·연결                          | 6일차                 |
 
 ## 결정 사항
 
@@ -21,11 +21,17 @@
 2. 렌더러와 Geometry 함수를 분리. Grid는 CSS 배경이고, 그리는 중인 Vertex/Wall과 완성된 Room 및 오브젝트는 SVG로 렌더링합니다. 대량 오브젝트 성능을 실제로 측정한 뒤 Canvas/Konva를 검토합니다.
 3. Firestore 영속 데이터와 에디터 임시 상태를 분리. `projectsById`, `floorsById`, `roomsById`, `objectsById`, `paletteItemsById`로 참조를 정규화합니다.
 4. Preview나 Pointer 이동 중 임시 좌표는 저장 스냅샷에 넣지 않고, Pointer 종료 시 한 번의 Command로 확정합니다. Project Store의 변경 전후 데이터로 Undo/Redo를 실행하며 기록은 최근 100개까지 유지합니다.
-5. Firebase는 6일차에 연결합니다. 현재는 로컬 프로젝트와 1F를 Store에 생성하고 UI 저장 버튼은 비활성입니다. 환경 변수, 실제 Firestore 보안 규칙, 오프라인 동기화는 연결 시 확정합니다.
+5. Firebase는 다층 데이터 구조를 완성한 뒤 7일차에 연결합니다. 현재는 로컬 프로젝트와 1F를 Store에 생성하고 층 추가·전환·이름 변경·삭제를 로컬 상태에서 처리합니다. UI 저장 버튼은 비활성입니다. 환경 변수, 실제 Firestore 보안 규칙, 오프라인 동기화는 연결 시 확정합니다.
 
 ## 데이터 흐름 예정
 
 `Pointer Event → 화면 좌표 → World 좌표 → Geometry 검증 → Command → Project Store → Repository → Firestore`
+
+층별 `roomIds`와 `objectIds`는 Floor에 보관합니다. 새 층에는 활성 층의 Room을 새 ID와 독립된 Vertex 배열로 복제하고, 사용자가 `일반 물품도 함께 복제`를 선택했을 때만 일반 Object를 새 ID로 복제합니다. 각 층은 나란히 표시하며 활성 층만 편집하고 다른 층은 도면 전체를 맞춘 읽기 전용 미리보기입니다. 도면 숨기기·크게 보기와 탭 선택은 화면 표시 상태만 바꾸며 저장 대상 Floor 데이터에는 영향을 주지 않습니다. 반투명 겹쳐 보기도 FloorBoard의 화면 상태로만 관리합니다. 선택한 비교 층의 Room과 Object를 활성 층의 Viewport로 변환해 같은 SVG에 옅은 색으로 그리며, 비교 층 도형은 포인터 이벤트와 선택·편집 대상에서 제외합니다. 층 전환은 Editor Store의 활성 Floor ID만 바꾸고 선택·그리기 초안·편집 미리보기를 지웁니다. 전환하거나 표시 칸의 수를 바꾸면 활성 편집 영역의 크기를 측정해 공간과 회전된 물품의 World 경계를 중앙에 맞추고, 화면에 들어오도록 배율을 조정합니다. 층 생성·이름 변경·삭제는 Project Store에서 Command로 기록하며, 층 삭제 시 그 층의 Room과 Object도 함께 제거하고 Undo로 복원할 수 있습니다. Viewport는 층간에 공유합니다.
+
+층 연결 물품은 Palette의 `floorConnector` 속성으로 구분하며, 물품 추가 양식과 선택한 Palette 항목의 토글에서 변경합니다. 설정 변경은 이후 배치에 적용하고 기존 Object의 연결 여부는 유지합니다. 배치하면 프로젝트의 모든 층에 같은 좌표와 외형의 Object를 하나씩 만들고, `floorConnectionId`로 묶습니다. 각 Object의 `fromFloorId`와 `toFloorId`는 프로젝트 층 순서상 바로 아래·위 층을 가리키며 끝층에서는 `null`입니다. 층을 추가할 때 일반 물품 복제 여부와 관계없이 연결 물품을 새 층에도 만들고, 층을 삭제하면 남은 물품의 연결 ID를 갱신합니다. 연결 물품의 이동·외형 변경·잠금·삭제·붙여넣기는 같은 연결의 모든 층에 한 Command로 반영합니다. 도면에는 위층과 아래층 이름을 표시해 연결 위치를 확인할 수 있습니다.
+
+배열 배치는 Editor의 임시 개수·간격 설정으로 중심 좌표 목록을 만든 뒤 Project Store의 단일 Command로 확정합니다. 층 연결 물품은 배열의 각 칸마다 별도 `floorConnectionId`를 만들고 모든 층에 복제합니다. 공간 경계 Snap은 물품 또는 배열 전체의 외곽 크기를 기준으로 벽의 안쪽 법선 방향에 중심을 맞추고, 모서리에서는 벽 구간 안에 들어오도록 위치를 제한합니다. 물품 회전과 공간 회전은 드래그 각도가 90° 배수에서 8° 이내일 때 정확한 직각으로 보정합니다. 공간은 별도 회전 값을 저장하지 않고 꼭짓점 좌표를 중심 기준으로 변환해 기존 Polygon 유효성 검사를 거쳐 저장합니다.
 
 Pan/Zoom은 `Pointer Event → Editor Store(Viewport) → 렌더링`으로 끝나며 Firestore에 저장하지 않습니다.
 
