@@ -8,7 +8,13 @@ import {
   layoutObjectFromPaletteItem,
 } from '../features/object/catalog';
 import { isValidObjectArray, type ObjectArrayOptions } from '../features/object/array';
+import {
+  MAX_SET_PLACED_OBJECTS,
+  layoutObjectsFromSet,
+  normalizeSetMembers,
+} from '../features/object/setPresets';
 import { normalizeObjectRotation } from '../features/object/edit';
+import { rotateGroupObjects } from '../features/object/group';
 import {
   connectedObjects,
   floorConnectionLinks,
@@ -19,6 +25,7 @@ import type { RoomEditError } from '../features/room/edit';
 import type {
   Floor,
   LayoutObject,
+  ObjectSetTemplate,
   ObjectAppearance,
   PaletteItem,
   Point,
@@ -38,6 +45,7 @@ const initialProject: Project = {
   targetAreaSqm: null,
   floorIds: [LOCAL_FLOOR_ID],
   paletteItemIds: defaultPaletteItems.map((item) => item.id),
+  setTemplateIds: [],
   schemaVersion: 1,
   updatedAt: new Date().toISOString(),
 };
@@ -56,6 +64,7 @@ export interface ProjectState {
   roomsById: Record<string, Room>;
   objectsById: Record<string, LayoutObject>;
   paletteItemsById: Record<string, PaletteItem>;
+  setTemplatesById: Record<string, ObjectSetTemplate>;
   historyPast: EditCommand[];
   historyFuture: EditCommand[];
   undo: () => boolean;
@@ -63,7 +72,12 @@ export interface ProjectState {
   replaceProjectData: (
     data: Pick<
       ProjectState,
-      'projectsById' | 'floorsById' | 'roomsById' | 'objectsById' | 'paletteItemsById'
+      | 'projectsById'
+      | 'floorsById'
+      | 'roomsById'
+      | 'objectsById'
+      | 'paletteItemsById'
+      | 'setTemplatesById'
     >,
   ) => void;
   createFloor: (
@@ -77,6 +91,11 @@ export interface ProjectState {
     input: Pick<PaletteItem, 'name' | 'category' | 'width' | 'height' | 'color' | 'shape'> &
       Pick<PaletteItem, 'floorConnector'>,
   ) => PaletteItem | null;
+  addSetTemplate: (
+    projectId: string,
+    name: string,
+    objects: LayoutObject[],
+  ) => ObjectSetTemplate | null;
   setPaletteItemFloorConnector: (itemId: string, floorConnector: boolean) => boolean;
   createRoom: (floorId: string, vertices: Point[]) => boolean;
   createLayoutObject: (
@@ -92,6 +111,12 @@ export interface ProjectState {
     appearance: ObjectAppearance,
     options: ObjectArrayOptions,
   ) => boolean;
+  createObjectSetArray: (
+    floorId: string,
+    setId: string,
+    centers: Point[],
+    options: ObjectArrayOptions,
+  ) => boolean;
   updateLayoutObject: (
     objectId: string,
     patch: Partial<
@@ -99,6 +124,7 @@ export interface ProjectState {
     >,
   ) => boolean;
   moveLayoutObjects: (objectIds: string[], delta: Point) => boolean;
+  rotateLayoutObjectGroup: (groupId: string, degrees: number) => boolean;
   duplicateLayoutObjects: (
     floorId: string,
     sourceObjects: LayoutObject[],
@@ -139,6 +165,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     roomsById: {},
     objectsById: {},
     paletteItemsById: Object.fromEntries(defaultPaletteItems.map((item) => [item.id, item])),
+    setTemplatesById: {},
     historyPast: [],
     historyFuture: [],
     replaceProjectData: (data) => set({ ...data, historyPast: [], historyFuture: [] }),
@@ -192,10 +219,20 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             floorId,
             vertices: room.vertices.map((vertex) => ({ ...vertex })),
           }));
+        const copiedGroupIds = new Map<string, string>();
         const copiedObjects = (options?.copyObjects ? (source?.objectIds ?? []) : [])
           .map((id) => state.objectsById[id])
           .filter((object) => object && !object.floorConnectionId)
-          .map((object) => ({ ...object, id: crypto.randomUUID(), floorId }));
+          .map((object) => {
+            if (object.groupId && !copiedGroupIds.has(object.groupId))
+              copiedGroupIds.set(object.groupId, crypto.randomUUID());
+            return {
+              ...object,
+              id: crypto.randomUUID(),
+              floorId,
+              ...(object.groupId ? { groupId: copiedGroupIds.get(object.groupId) } : {}),
+            };
+          });
         const seenConnections = new Set<string>();
         const connectedObjectsToCopy = project.floorIds
           .flatMap((id) => state.floorsById[id]?.objectIds ?? [])
@@ -343,6 +380,35 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       });
       return created;
     },
+    addSetTemplate: (projectId, name, objects) => {
+      const trimmedName = name.trim();
+      const members = normalizeSetMembers(objects);
+      if (!trimmedName || trimmedName.length > 40 || !members) return null;
+      let created: ObjectSetTemplate | null = null;
+      commit('내 세트 만들기', (state) => {
+        const project = state.projectsById[projectId];
+        if (!project) return state;
+        const template: ObjectSetTemplate = {
+          id: crypto.randomUUID(),
+          projectId,
+          name: trimmedName,
+          members,
+        };
+        created = template;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [projectId]: {
+              ...project,
+              setTemplateIds: [...project.setTemplateIds, template.id],
+              updatedAt: new Date().toISOString(),
+            },
+          },
+          setTemplatesById: { ...state.setTemplatesById, [template.id]: template },
+        };
+      });
+      return created;
+    },
     setPaletteItemFloorConnector: (itemId, floorConnector) => {
       let updated = false;
       commit('물품 층 연결 설정', (state) => {
@@ -456,6 +522,50 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       });
       return created;
     },
+    createObjectSetArray: (floorId, setId, centers, options) => {
+      if (
+        !isValidObjectArray(options) ||
+        centers.length !== options.columns * options.rows ||
+        centers.some((center) => !Number.isFinite(center.x) || !Number.isFinite(center.y))
+      )
+        return false;
+      let created = false;
+      commit(centers.length > 1 ? '물품 세트 배열 배치' : '물품 세트 배치', (state) => {
+        const floor = state.floorsById[floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        const template = state.setTemplatesById[setId];
+        if (
+          !floor ||
+          !project ||
+          !template ||
+          template.projectId !== project.id ||
+          centers.length * template.members.length > MAX_SET_PLACED_OBJECTS
+        )
+          return state;
+        const objects = centers.flatMap((center) =>
+          layoutObjectsFromSet(template, floorId, center, () => crypto.randomUUID()),
+        );
+        created = true;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          floorsById: {
+            ...state.floorsById,
+            [floorId]: {
+              ...floor,
+              objectIds: [...floor.objectIds, ...objects.map((object) => object.id)],
+            },
+          },
+          objectsById: {
+            ...state.objectsById,
+            ...Object.fromEntries(objects.map((object) => [object.id, object])),
+          },
+        };
+      });
+      return created;
+    },
     updateLayoutObject: (objectId, patch) => {
       let updated = false;
       commit('물품 수정', (state) => {
@@ -555,6 +665,33 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       });
       return moved;
     },
+    rotateLayoutObjectGroup: (groupId, degrees) => {
+      if (!groupId || !Number.isFinite(degrees)) return false;
+      let rotated = false;
+      commit('물품 세트 회전', (state) => {
+        const members = Object.values(state.objectsById).filter((object) => object.groupId === groupId);
+        if (members.length === 0 || members.some((object) => object.locked)) return state;
+        const floor = state.floorsById[members[0].floorId];
+        const project = floor && state.projectsById[floor.projectId];
+        if (!project || members.some((object) => object.floorId !== floor.id)) return state;
+        rotated = true;
+        if (degrees % 360 === 0) return state;
+        const nextMembers = rotateGroupObjects(members, degrees);
+        if (nextMembers.some((object) => !Number.isFinite(object.x) || !Number.isFinite(object.y)))
+          return state;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          objectsById: {
+            ...state.objectsById,
+            ...Object.fromEntries(nextMembers.map((object) => [object.id, object])),
+          },
+        };
+      });
+      return rotated;
+    },
     duplicateLayoutObjects: (floorId, sourceObjects, offset) => {
       if (
         sourceObjects.length === 0 ||
@@ -575,7 +712,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         const project = floor && state.projectsById[floor.projectId];
         if (!floor || !project || sourceObjects.some((object) => object.floorId !== floorId))
           return state;
+        const copiedGroupIds = new Map<string, string>();
         const duplicates = sourceObjects.flatMap((object) => {
+          if (object.groupId && !copiedGroupIds.has(object.groupId))
+            copiedGroupIds.set(object.groupId, crypto.randomUUID());
           const connectionId = object.floorConnectionId ? crypto.randomUUID() : null;
           return (connectionId ? project.floorIds : [floorId]).map((targetFloorId) => ({
             ...object,
@@ -584,6 +724,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             x: object.x + offset.x,
             y: object.y + offset.y,
             locked: false,
+            ...(object.groupId ? { groupId: copiedGroupIds.get(object.groupId) } : {}),
             ...(connectionId
               ? { floorConnectionId: connectionId, ...floorConnectionLinks(project, targetFloorId) }
               : {}),

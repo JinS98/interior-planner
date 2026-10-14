@@ -325,6 +325,51 @@
   max-height: 205px;
   overflow-y: auto;
 }
+.objectSetPresets {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #e8ebf1;
+  h4 {
+    margin: 0 0 8px;
+    color: #293850;
+    font-size: 12px;
+  }
+}
+.objectSetPresetList {
+  display: grid;
+  gap: 6px;
+  button {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #dce2ec;
+    border-radius: 8px;
+    background: #fff;
+    color: #293850;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    &:hover,
+    &[aria-pressed='true'] {
+      border-color: #8295ec;
+      background: #f2f5ff;
+    }
+    &:focus-visible {
+      outline: 2px solid #526fe1;
+      outline-offset: 2px;
+    }
+    strong {
+      font-size: 12px;
+    }
+    span {
+      color: #718099;
+      font-size: 10px;
+    }
+  }
+}
 .paletteSearch {
   width: 100%;
   margin-bottom: 9px;

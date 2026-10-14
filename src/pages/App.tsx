@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   areaFromSquareMeters,
   areaToSquareMeters,
@@ -31,6 +31,8 @@ import {
   isValidObjectArray,
   type ObjectArrayOptions,
 } from '../features/object/array';
+import { SetBuilder } from '../features/object/SetBuilder';
+import { MAX_SET_PLACED_OBJECTS } from '../features/object/setPresets';
 import { useEditorStore, type EditorTool } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import type { LayoutObject, ObjectAppearance } from '../types/layout';
@@ -450,6 +452,9 @@ function ShortcutHelp() {
             직전 점·선택 취소 <kbd>Esc</kbd>
           </span>
           <span>
+            요소 간 거리 <kbd>Alt + 마우스 올리기</kbd>
+          </span>
+          <span>
             직전 점 취소 <kbd>Backspace</kbd>
           </span>
           <span>
@@ -500,6 +505,7 @@ function ShortcutHelp() {
 export function App() {
   const [areaUnit, setAreaUnit] = useState<AreaUnit>('sqm');
   const [addingPaletteItem, setAddingPaletteItem] = useState(false);
+  const [setBuilderOpen, setSetBuilderOpen] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [paletteQuery, setPaletteQuery] = useState('');
   const [newItemFloorConnector, setNewItemFloorConnector] = useState(false);
@@ -511,11 +517,17 @@ export function App() {
   const tool = useEditorStore((state) => state.tool);
   const setTool = useEditorStore((state) => state.setTool);
   const selectedPaletteItemId = useEditorStore((state) => state.selectedPaletteItemId);
+  const selectedObjectSetId = useEditorStore((state) => state.selectedObjectSetId);
   const setPaletteItem = useEditorStore((state) => state.setPaletteItem);
+  const setObjectSet = useEditorStore((state) => state.setObjectSet);
   const clearPaletteItem = useEditorStore((state) => state.clearPaletteItem);
   const objectPlacement = useEditorStore((state) => state.objectPlacement);
   const setObjectPlacement = useEditorStore((state) => state.setObjectPlacement);
   const selectedObjectIds = useEditorStore((state) => state.selectedObjectIds);
+  const editingGroupId = useEditorStore((state) => state.editingGroupId);
+  const selectObjects = useEditorStore((state) => state.selectObjects);
+  const startGroupInternalEdit = useEditorStore((state) => state.startGroupInternalEdit);
+  const finishGroupInternalEdit = useEditorStore((state) => state.finishGroupInternalEdit);
   const clipboardCount = useEditorStore((state) => state.objectClipboard.length);
   const selectedObjectId = selectedObjectIds.length === 1 ? selectedObjectIds[0] : null;
   const objectEditPreview = useEditorStore((state) => state.objectEditPreview);
@@ -532,13 +544,20 @@ export function App() {
   const setGeometryError = useEditorStore((state) => state.setGeometryError);
   const project = useProjectStore((state) => state.projectsById[activeProjectId ?? '']);
   const paletteItemsById = useProjectStore((state) => state.paletteItemsById);
+  const setTemplatesById = useProjectStore((state) => state.setTemplatesById);
   const addPaletteItem = useProjectStore((state) => state.addPaletteItem);
+  const addSetTemplate = useProjectStore((state) => state.addSetTemplate);
+  useEffect(() => {
+    if (selectedObjectSetId && !setTemplatesById[selectedObjectSetId]) clearPaletteItem();
+  }, [selectedObjectSetId, setTemplatesById, clearPaletteItem]);
   const setPaletteItemFloorConnector = useProjectStore(
     (state) => state.setPaletteItemFloorConnector,
   );
   const setTargetAreaSqm = useProjectStore((state) => state.setTargetAreaSqm);
   const updateRoomVertices = useProjectStore((state) => state.updateRoomVertices);
   const updateLayoutObject = useProjectStore((state) => state.updateLayoutObject);
+  const rotateLayoutObjectGroup = useProjectStore((state) => state.rotateLayoutObjectGroup);
+  const duplicateLayoutObjects = useProjectStore((state) => state.duplicateLayoutObjects);
   const setLayoutObjectsLocked = useProjectStore((state) => state.setLayoutObjectsLocked);
   const historyPast = useProjectStore((state) => state.historyPast);
   const historyFuture = useProjectStore((state) => state.historyFuture);
@@ -553,14 +572,36 @@ export function App() {
         : objectsById[selectedObjectId]))
     : null;
   const selectedPaletteItem = paletteItemsById[selectedPaletteItemId ?? ''];
+  const selectedObjectSet = setTemplatesById[selectedObjectSetId ?? ''];
+  const maxSetInstances = Math.min(
+    100,
+    Math.floor(MAX_SET_PLACED_OBJECTS / (selectedObjectSet?.members.length ?? 1)),
+  );
   const selectedObjects = selectedObjectIds
     .map((id) => objectsById[id])
     .filter((object) => object && object.floorId === activeFloorId);
+  const selectedGroupId = !editingGroupId && selectedObjects.length > 0
+    ? selectedObjects[0].groupId
+    : null;
+  const selectedGroup = selectedGroupId && selectedObjects.every((object) => object.groupId === selectedGroupId) &&
+    (floor?.objectIds ?? []).filter((id) => objectsById[id]?.groupId === selectedGroupId).length === selectedObjects.length
+    ? selectedGroupId
+    : null;
+  const groupName = selectedGroup
+    ? (setTemplatesById[selectedObjects[0].groupTemplateId ?? '']?.name ?? '물품 세트')
+    : null;
   const visiblePaletteItems = (project?.paletteItemIds ?? [])
     .map((id) => paletteItemsById[id])
     .filter(
       (item) =>
         item && normalizePaletteSearch(item.name).includes(normalizePaletteSearch(paletteQuery)),
+    );
+  const visibleObjectSetPresets = (project?.setTemplateIds ?? [])
+    .map((id) => setTemplatesById[id])
+    .filter(
+      (template) =>
+        template &&
+        normalizePaletteSearch(template.name).includes(normalizePaletteSearch(paletteQuery)),
     );
   const lockedCount = selectedObjects.filter((object) => object.locked).length;
   const unlockedCount = selectedObjects.length - lockedCount;
@@ -597,12 +638,33 @@ export function App() {
   function updateObjectArray(patch: Partial<ObjectArrayOptions>) {
     setObjectArray((current) => {
       const next = { ...current, ...patch };
-      return isValidObjectArray(next) ? next : current;
+      return isValidObjectArray(next) &&
+        (!selectedObjectSet || next.columns * next.rows <= maxSetInstances)
+        ? next
+        : current;
     });
   }
 
   return (
     <div className={styles.app}>
+      {setBuilderOpen && project && (
+        <SetBuilder
+          items={(project.paletteItemIds ?? [])
+            .map((id) => paletteItemsById[id])
+            .filter((item) => item != null)}
+          onClose={() => setSetBuilderOpen(false)}
+          onSave={(name, objects) => {
+            const template = addSetTemplate(project.id, name, objects);
+            if (!template) return false;
+            setObjectSet(template.id);
+            setPlacementMode('single');
+            setObjectArray(DEFAULT_OBJECT_ARRAY);
+            setPaletteQuery('');
+            setSetBuilderOpen(false);
+            return true;
+          }}
+        />
+      )}
       <header className={styles.header}>
         <div className={styles.brand}>
           <span className={styles.logo}>⌂</span>
@@ -615,7 +677,7 @@ export function App() {
         <button
           className={styles.primaryButton}
           disabled
-          title="7일차에 Firebase 저장 기능을 연결합니다"
+          title="10일차에 Firebase 저장 기능을 연결합니다"
         >
           저장 준비 중
         </button>
@@ -812,9 +874,41 @@ export function App() {
                       </button>
                     ))}
                   </div>
-                  {visiblePaletteItems.length === 0 && (
-                    <p>검색 결과가 없습니다. 새 물품으로 추가할 수 있습니다.</p>
-                  )}
+                  <div className={styles.objectSetPresets}>
+                    <h4>내 세트</h4>
+                    <button
+                      type="button"
+                      className={styles.paletteAddButton}
+                      onClick={() => setSetBuilderOpen(true)}
+                    >
+                      + 세트 만들기
+                    </button>
+                    <div className={styles.objectSetPresetList}>
+                      {visibleObjectSetPresets.map((template) => (
+                        <button
+                          key={template.id}
+                          type="button"
+                          aria-pressed={selectedObjectSetId === template.id}
+                          onClick={() => {
+                            setObjectSet(template.id);
+                            setPlacementMode('single');
+                            setObjectArray(DEFAULT_OBJECT_ARRAY);
+                          }}
+                        >
+                          <strong>{template.name}</strong>
+                          <span>물품 {template.members.length}개</span>
+                        </button>
+                      ))}
+                    </div>
+                    {(project?.setTemplateIds.length ?? 0) === 0 && (
+                      <p>물품을 직접 배치해 자주 쓰는 세트를 만들어 보세요.</p>
+                    )}
+                  </div>
+                  {paletteQuery &&
+                    visiblePaletteItems.length === 0 &&
+                    visibleObjectSetPresets.length === 0 && (
+                      <p>검색 결과가 없습니다. 새 물품으로 추가할 수 있습니다.</p>
+                    )}
                 </>
               )}
               {addingPaletteItem && (
@@ -892,10 +986,83 @@ export function App() {
                   </div>
                 </form>
               )}
-              {!addingPaletteItem && selectedPaletteItemId === null && (
-                <p className={styles.paletteEmptySelection} role="status">
-                  선택된 물품이 없습니다. 물품을 고르거나 추가해 주세요.
-                </p>
+              {!addingPaletteItem &&
+                selectedPaletteItemId === null &&
+                selectedObjectSetId === null && (
+                  <p className={styles.paletteEmptySelection} role="status">
+                    선택된 물품이 없습니다. 물품이나 세트를 고르거나 추가해 주세요.
+                  </p>
+                )}
+              {!addingPaletteItem && selectedObjectSetId && (
+                <div className={styles.paletteSettings}>
+                  <h4>{selectedObjectSet?.name} 배치 설정</h4>
+                  <p>세트를 도면에 놓은 뒤 구성 물품을 각각 편집할 수 있습니다.</p>
+                  <div className={styles.arraySettings}>
+                    <span className={styles.objectFieldLabel}>배치 방식</span>
+                    <div className={styles.placementMode} role="group" aria-label="세트 배치 방식">
+                      <button
+                        type="button"
+                        aria-pressed={placementMode === 'single'}
+                        onClick={() => selectPlacementMode('single')}
+                      >
+                        한 개씩
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={placementMode === 'array'}
+                        onClick={() => selectPlacementMode('array')}
+                      >
+                        여러 개 배열
+                      </button>
+                    </div>
+                    {placementMode === 'array' && (
+                      <>
+                        <div className={styles.arrayFields}>
+                          <ObjectArrayInput
+                            label="가로 개수"
+                            value={objectArray.columns}
+                            min={1}
+                            max={Math.floor(maxSetInstances / objectArray.rows)}
+                            step={1}
+                            onCommit={(columns) => updateObjectArray({ columns })}
+                          />
+                          <ObjectArrayInput
+                            label="세로 개수"
+                            value={objectArray.rows}
+                            min={1}
+                            max={Math.floor(maxSetInstances / objectArray.columns)}
+                            step={1}
+                            onCommit={(rows) => updateObjectArray({ rows })}
+                          />
+                          <ObjectArrayInput
+                            label="가로 간격 (m)"
+                            value={objectArray.gapX}
+                            min={0}
+                            max={20}
+                            step={0.1}
+                            onCommit={(gapX) => updateObjectArray({ gapX })}
+                          />
+                          <ObjectArrayInput
+                            label="세로 간격 (m)"
+                            value={objectArray.gapY}
+                            min={0}
+                            max={20}
+                            step={0.1}
+                            onCommit={(gapY) => updateObjectArray({ gapY })}
+                          />
+                        </div>
+                        <p>
+                          {objectArray.columns * objectArray.rows}개 세트를 클릭 한 번으로
+                          배치합니다.
+                        </p>
+                      </>
+                    )}
+                    {placementMode === 'single' && <p>도면 클릭 한 번에 세트 1개를 배치합니다.</p>}
+                    <p>
+                      기존 물품과 가까워지면 정렬·같은 간격·아랫줄 시작선에 자동으로 맞춰집니다.
+                    </p>
+                  </div>
+                </div>
               )}
               {!addingPaletteItem && selectedPaletteItemId !== null && (
                 <div className={styles.paletteSettings}>
@@ -980,7 +1147,9 @@ export function App() {
                       </>
                     )}
                     {placementMode === 'single' && <p>도면 클릭 한 번에 물품 1개를 배치합니다.</p>}
-                    <p>기존 물품과 가까워지면 정렬과 같은 간격으로 자동 보정됩니다.</p>
+                    <p>
+                      기존 물품과 가까워지면 정렬·같은 간격·아랫줄 시작선에 자동으로 맞춰집니다.
+                    </p>
                   </div>
                   <details className={styles.placementDetails}>
                     <summary>크기·모양·색상 조정</summary>
@@ -1034,7 +1203,32 @@ export function App() {
               {lockedCount > 0 && <p>잠긴 물품 {lockedCount}개는 이동·수정·삭제에서 제외됩니다.</p>}
             </section>
           )}
-          {tool === 'select' && selectedObjectIds.length > 1 && (
+          {tool === 'select' && selectedGroup && (
+            <section className={styles.objectEditSection} aria-label={`${groupName} 그룹 편집`}>
+              <h3>{groupName} · {selectedObjects.length}개 물품</h3>
+              <p>그룹을 드래그해 이동하고 위쪽 손잡이로 회전하세요. 복제한 세트는 독립적으로 편집됩니다.</p>
+              <div className={styles.objectActions}>
+                <button type="button" disabled={lockedCount > 0} onClick={() => rotateLayoutObjectGroup(selectedGroup, -90)}>↶ 90°</button>
+                <button type="button" disabled={lockedCount > 0} onClick={() => rotateLayoutObjectGroup(selectedGroup, 90)}>↷ 90°</button>
+                <button type="button" onClick={() => {
+                  if (!activeFloorId) return;
+                  const ids = duplicateLayoutObjects(activeFloorId, selectedObjects, { x: 0.25, y: 0.25 });
+                  if (ids.length > 0) selectObjects(ids);
+                }}>그룹 복제</button>
+                <button type="button" onClick={() => startGroupInternalEdit(selectedGroup)}>내부 편집</button>
+              </div>
+            </section>
+          )}
+          {tool === 'select' && editingGroupId && (
+            <section className={styles.objectEditSection} aria-label="세트 내부 편집">
+              <h3>세트 내부 편집</h3>
+              <p>구성 물품을 클릭해 개별 이동·회전·크기·색상을 수정하세요. 변경은 현재 배치된 세트에 적용됩니다.</p>
+              <div className={styles.objectActions}>
+                <button type="button" onClick={finishGroupInternalEdit}>그룹 편집으로 돌아가기</button>
+              </div>
+            </section>
+          )}
+          {tool === 'select' && selectedObjectIds.length > 1 && !selectedGroup && (
             <section className={styles.objectEditSection} aria-label="다중 선택된 물품">
               <h3>{selectedObjectIds.length}개 물품 선택</h3>
               <p>
@@ -1043,7 +1237,7 @@ export function App() {
               </p>
             </section>
           )}
-          {tool === 'select' && selectedObject && (
+          {tool === 'select' && selectedObject && !selectedGroup && (
             <section
               className={styles.objectEditSection}
               aria-label={`${selectedObject.name} 편집`}

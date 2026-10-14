@@ -43,6 +43,9 @@ export interface LayoutObject {
   shape: ObjectShape;
   rotation: number;
   locked: boolean;
+  /** 한 번 배치한 세트의 구성 물품을 묶는 인스턴스 ID. */
+  groupId?: string;
+  groupTemplateId?: string;
   /** 같은 수직 연결 물품의 층별 인스턴스를 묶는다. */
   floorConnectionId?: string;
   fromFloorId?: string | null;
@@ -61,6 +64,19 @@ export interface PaletteItem extends ObjectAppearance {
   floorConnector?: boolean;
 }
 
+/** 세트는 물품의 당시 속성과 상대 위치를 보관해 팔레트 변경과 독립적으로 재사용한다. */
+export type ObjectSetMember = Pick<
+  LayoutObject,
+  'category' | 'type' | 'name' | 'x' | 'y' | 'width' | 'height' | 'color' | 'shape' | 'rotation'
+>;
+
+export interface ObjectSetTemplate {
+  id: string;
+  projectId: string;
+  name: string;
+  members: ObjectSetMember[];
+}
+
 export interface Project {
   id: string;
   ownerId: string;
@@ -69,6 +85,7 @@ export interface Project {
   targetAreaSqm: number | null;
   floorIds: string[];
   paletteItemIds: string[];
+  setTemplateIds: string[];
   schemaVersion: 1;
   updatedAt: string;
 }

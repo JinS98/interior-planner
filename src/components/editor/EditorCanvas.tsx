@@ -33,12 +33,19 @@ import {
   objectArrayFootprint,
   type ObjectArrayOptions,
 } from '../../features/object/array';
+import { layoutObjectsFromSet, objectSetFootprint } from '../../features/object/setPresets';
 import {
   copySelectedObjects,
   deleteSelectedObjects,
   pasteCopiedObjects,
 } from '../../features/object/clipboard';
 import { resizeObjectFromScreenDrag, rotateObjectFromScreenDrag } from '../../features/object/edit';
+import {
+  groupBounds,
+  groupMemberIds,
+  groupRotationFromScreenDrag,
+  rotateGroupObjects,
+} from '../../features/object/group';
 import {
   hitTestLayoutObject,
   isNearObjectResizeHandle,
@@ -54,6 +61,12 @@ import {
   isTypingTarget,
   resolveEditorShortcut,
 } from '../../features/editor/shortcuts';
+import {
+  elementOutline,
+  measureHoveredElement,
+  type ElementMeasurement,
+  type MeasurableElement,
+} from '../../features/editor/measurement';
 import { useEditorStore } from '../../store/editorStore';
 import { useProjectStore } from '../../store/projectStore';
 import type { LayoutObject, Point, Room, Viewport } from '../../types/layout';
@@ -107,6 +120,42 @@ function RoomAreaLabel({
   );
 }
 
+function DistanceGuide({
+  target,
+  measurement,
+  viewport,
+}: {
+  target: MeasurableElement;
+  measurement: ElementMeasurement;
+  viewport: Viewport;
+}) {
+  const start = worldToScreen(measurement.start, viewport);
+  const end = worldToScreen(measurement.end, viewport);
+  const targetOutline = elementOutline(target).map((point) => worldToScreen(point, viewport));
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.hypot(dx, dy);
+  const label = `${measurement.distanceMeters.toFixed(2)} m`;
+  const labelWidth = label.length * 7 + 18;
+  const labelX = (start.x + end.x) / 2 + (length > 0 ? (-dy / length) * 16 : 0);
+  const labelY = (start.y + end.y) / 2 + (length > 0 ? (dx / length) * 16 : -18);
+
+  return (
+    <g className={styles.distanceGuide} pointerEvents="none">
+      <polygon points={targetOutline.map((point) => `${point.x},${point.y}`).join(' ')} />
+      <line x1={start.x} y1={start.y} x2={end.x} y2={end.y} />
+      <circle cx={start.x} cy={start.y} r={3} />
+      <circle cx={end.x} cy={end.y} r={3} />
+      <g transform={`translate(${labelX} ${labelY})`}>
+        <rect x={-labelWidth / 2} y={-11} width={labelWidth} height={22} rx={6} />
+        <text textAnchor="middle" dominantBaseline="middle">
+          {label}
+        </text>
+      </g>
+    </g>
+  );
+}
+
 export function EditorCanvas({
   areaUnit,
   overlayFloorId,
@@ -121,9 +170,11 @@ export function EditorCanvas({
   const tool = useEditorStore((state) => state.tool);
   const setTool = useEditorStore((state) => state.setTool);
   const selectedPaletteItemId = useEditorStore((state) => state.selectedPaletteItemId);
+  const selectedObjectSetId = useEditorStore((state) => state.selectedObjectSetId);
   const clearPaletteItem = useEditorStore((state) => state.clearPaletteItem);
   const objectPlacement = useEditorStore((state) => state.objectPlacement);
   const selectedObjectIds = useEditorStore((state) => state.selectedObjectIds);
+  const editingGroupId = useEditorStore((state) => state.editingGroupId);
   const selectedObjectId = selectedObjectIds.length === 1 ? selectedObjectIds[0] : null;
   const objectEditPreview = useEditorStore((state) => state.objectEditPreview);
   const objectMovePreviewById = useEditorStore((state) => state.objectMovePreviewById);
@@ -154,16 +205,22 @@ export function EditorCanvas({
   const overlayFloor = overlayFloorId !== activeFloorId ? selectedOverlayFloor : undefined;
   const roomsById = useProjectStore((state) => state.roomsById);
   const objectsById = useProjectStore((state) => state.objectsById);
+  const selectedObjectSet = useProjectStore(
+    (state) => state.setTemplatesById[selectedObjectSetId ?? ''],
+  );
   const selectedPaletteItem = useProjectStore(
     (state) => state.paletteItemsById[selectedPaletteItemId ?? ''],
   );
   const createRoom = useProjectStore((state) => state.createRoom);
   const createLayoutObjectArray = useProjectStore((state) => state.createLayoutObjectArray);
+  const createObjectSetArray = useProjectStore((state) => state.createObjectSetArray);
   const updateLayoutObject = useProjectStore((state) => state.updateLayoutObject);
   const moveLayoutObjects = useProjectStore((state) => state.moveLayoutObjects);
+  const rotateLayoutObjectGroup = useProjectStore((state) => state.rotateLayoutObjectGroup);
   const splitRoom = useProjectStore((state) => state.splitRoom);
   const updateRoomVertices = useProjectStore((state) => state.updateRoomVertices);
   const [spacePressed, setSpacePressed] = useState(false);
+  const [altPressed, setAltPressed] = useState(false);
   const drag = useRef<{ pointerId: number; point: Point; viewport: Viewport } | null>(null);
   const roomClick = useRef<{ pointerId: number; point: Point } | null>(null);
   const vertexDrag = useRef<{
@@ -211,6 +268,13 @@ export function EditorCanvas({
     startPoint: Point;
     original: LayoutObject;
   } | null>(null);
+  const groupRotate = useRef<{
+    pointerId: number;
+    startPoint: Point;
+    originals: LayoutObject[];
+    groupId: string;
+    viewport: Viewport;
+  } | null>(null);
   const [cursorWorld, setCursorWorld] = useState<Point>({ x: 0, y: 0 });
   const [hoverPoint, setHoverPoint] = useState<Point | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -251,7 +315,18 @@ export function EditorCanvas({
       objectMovePreviewById?.[object.id] ??
       (objectEditPreview?.id === object.id ? objectEditPreview : object),
   );
-  const selectedObject = displayedObjects.find((object) => object.id === selectedObjectId);
+  const selectedGroupId = !editingGroupId && selectedObjectIds.length > 0
+    ? objectsById[selectedObjectIds[0]]?.groupId
+    : null;
+  const groupObjects = selectedGroupId &&
+    groupMemberIds(objects, selectedGroupId).length === selectedObjectIds.length &&
+    selectedObjectIds.every((id) => objectsById[id]?.groupId === selectedGroupId)
+    ? displayedObjects.filter((object) => object.groupId === selectedGroupId)
+    : [];
+  const selectedGroupBounds = groupObjects.length > 0 ? groupBounds(groupObjects) : null;
+  const selectedObject = groupObjects.length > 0
+    ? undefined
+    : displayedObjects.find((object) => object.id === selectedObjectId);
   const selectedObjectOrigin = selectedObject
     ? worldToScreen({ x: selectedObject.x, y: selectedObject.y }, viewport)
     : null;
@@ -271,6 +346,33 @@ export function EditorCanvas({
     roomEditPreview?.roomId === room.id ? { ...room, vertices: roomEditPreview.vertices } : room,
   );
   const selectedRoom = displayedRooms.find((room) => room.id === selectedRoomId);
+  const measurementSource: MeasurableElement | null = selectedObject
+    ? { kind: 'object', object: selectedObject }
+    : selectedRoom
+      ? { kind: 'room', room: selectedRoom }
+      : null;
+  const hoveredMeasurement =
+    tool === 'select' &&
+    altPressed &&
+    hoverPoint &&
+    measurementSource &&
+    !spacePressed &&
+    !dragging &&
+    !movingVertex &&
+    !movingRoom &&
+    !rotatingRoom &&
+    !resizingObject &&
+    !movingObject &&
+    !rotatingObject &&
+    !marqueeRect
+      ? measureHoveredElement(
+          measurementSource,
+          displayedObjects,
+          displayedRooms,
+          hoverPoint,
+          viewport,
+        )
+      : null;
   const selectedRoomRotationHandle = selectedRoom
     ? roomRotationHandlePoint(selectedRoom.vertices, viewport)
     : null;
@@ -346,45 +448,63 @@ export function EditorCanvas({
   const displayedCursorWorld = closeReady
     ? roomDraftVertices[0]
     : (roomSnap?.world ?? divisionSnap?.world ?? divisionInteriorSnap?.world ?? cursorWorld);
+  const placementFootprint = selectedObjectSet
+    ? objectArrayFootprint(objectSetFootprint(selectedObjectSet), objectArray)
+    : objectArrayFootprint(objectPlacement, objectArray);
   const placementSnap =
-    tool === 'object' && selectedPaletteItem && !spacePressed && !dragging && hoverPoint !== null
-      ? snapObjectPlacement(
-          hoverPoint,
-          viewport,
-          objects,
-          objectArrayFootprint(objectPlacement, objectArray),
-          rooms,
-        )
+    tool === 'object' &&
+    (selectedPaletteItem || selectedObjectSet) &&
+    !spacePressed &&
+    !dragging &&
+    hoverPoint !== null
+      ? snapObjectPlacement(hoverPoint, viewport, objects, placementFootprint, rooms)
       : null;
   const placementCenter = placementSnap?.center ?? null;
   const placementScreen = placementCenter ? worldToScreen(placementCenter, viewport) : null;
+  let setPreviewIndex = 0;
   const objectPreviews =
-    placementCenter && selectedPaletteItem
-      ? objectArrayCenters(placementCenter, objectPlacement, objectArray).map((center, index) =>
-          layoutObjectFromPaletteItem(
-            activeFloorId ?? '',
-            selectedPaletteItem,
+    placementCenter && selectedObjectSet && floor
+      ? objectArrayCenters(
+          placementCenter,
+          objectSetFootprint(selectedObjectSet),
+          objectArray,
+        ).flatMap((center) =>
+          layoutObjectsFromSet(
+            selectedObjectSet,
+            floor.id,
             center,
-            `preview-${index}`,
-            objectPlacement,
+            () => `preview-set-${setPreviewIndex++}`,
           ),
         )
-      : [];
+      : placementCenter && selectedPaletteItem
+        ? objectArrayCenters(placementCenter, objectPlacement, objectArray).map((center, index) =>
+            layoutObjectFromPaletteItem(
+              activeFloorId ?? '',
+              selectedPaletteItem,
+              center,
+              `preview-${index}`,
+              objectPlacement,
+            ),
+          )
+        : [];
   const placementSnapHint = placementSnap?.roomBoundary
     ? '공간 경계에 맞춤'
     : placementSnap?.gapGuide
       ? `같은 간격 ${Number(placementSnap.gapGuide.meters.toFixed(2))}m`
-      : placementSnap?.horizontalReference && placementSnap.verticalReference
-        ? '가로·세로 정렬'
-        : placementSnap?.horizontalReference
-          ? '가로 정렬'
-          : placementSnap?.verticalReference
-            ? '세로 정렬'
-            : placementSnap?.grid
-              ? '격자에 맞춤'
-              : '클릭하여 배치';
-  const placementHint =
-    objectArray.columns * objectArray.rows > 1
+      : placementSnap?.startLineGuide
+        ? '배열 시작선에 맞춤'
+        : placementSnap?.horizontalReference && placementSnap.verticalReference
+          ? '가로·세로 정렬'
+          : placementSnap?.horizontalReference
+            ? '가로 정렬'
+            : placementSnap?.verticalReference
+              ? '세로 정렬'
+              : placementSnap?.grid
+                ? '격자에 맞춤'
+                : '클릭하여 배치';
+  const placementHint = selectedObjectSet
+    ? `${selectedObjectSet.name} · ${placementSnapHint}`
+    : objectArray.columns * objectArray.rows > 1
       ? `${objectArray.columns * objectArray.rows}개 · ${placementSnapHint}`
       : placementSnapHint;
 
@@ -434,11 +554,35 @@ export function EditorCanvas({
       setHoveredRoomInterior(false);
       drag.current = { pointerId: event.pointerId, point: localPoint(event), viewport };
       setDragging(true);
-    } else if (tool === 'room' || tool === 'divide' || (tool === 'object' && selectedPaletteItem)) {
+    } else if (
+      tool === 'room' ||
+      tool === 'divide' ||
+      (tool === 'object' && (selectedPaletteItem || selectedObjectSet))
+    ) {
       event.currentTarget.setPointerCapture(event.pointerId);
       roomClick.current = { pointerId: event.pointerId, point: localPoint(event) };
     } else if (tool === 'select') {
       const point = localPoint(event);
+      if (
+        !event.shiftKey &&
+        selectedGroupBounds &&
+        groupObjects.every((object) => !object.locked) &&
+        Math.hypot(
+          point.x - ((selectedGroupBounds.left + selectedGroupBounds.right) / 2 * viewport.scale + viewport.x),
+          point.y - (selectedGroupBounds.top * viewport.scale + viewport.y - 24),
+        ) <= (event.pointerType === 'touch' ? 18 : 11)
+      ) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        groupRotate.current = {
+          pointerId: event.pointerId,
+          startPoint: point,
+          originals: groupObjects.map((object) => objectsById[object.id]),
+          groupId: selectedGroupId!,
+          viewport,
+        };
+        setRotatingObject(true);
+        return;
+      }
       if (
         !event.shiftKey &&
         selectedObject &&
@@ -507,9 +651,11 @@ export function EditorCanvas({
         }
         const moveIds = selectedObjectIds.includes(objectHit.id)
           ? selectedObjectIds
-          : [objectHit.id];
+          : objectHit.groupId && editingGroupId !== objectHit.groupId
+            ? groupMemberIds(objects, objectHit.groupId)
+            : [objectHit.id];
         if (!selectedObjectIds.includes(objectHit.id)) selectObject(objectHit.id);
-        if (objectHit.locked) return;
+        if (moveIds.some((id) => objectsById[id]?.locked)) return;
         event.currentTarget.setPointerCapture(event.pointerId);
         const selectedIds = new Set(moveIds);
         objectMove.current = {
@@ -573,8 +719,19 @@ export function EditorCanvas({
     const currentObjectResize = objectResize.current;
     const currentObjectMove = objectMove.current;
     const currentObjectRotate = objectRotate.current;
+    const currentGroupRotate = groupRotate.current;
     const currentMarquee = marquee.current;
-    if (currentObjectResize?.pointerId === event.pointerId) {
+    if (currentGroupRotate?.pointerId === event.pointerId) {
+      const degrees = groupRotationFromScreenDrag(
+        currentGroupRotate.originals,
+        currentGroupRotate.startPoint,
+        point,
+        currentGroupRotate.viewport,
+      );
+      setObjectMovePreview(Object.fromEntries(
+        rotateGroupObjects(currentGroupRotate.originals, degrees).map((object) => [object.id, object]),
+      ));
+    } else if (currentObjectResize?.pointerId === event.pointerId) {
       setObjectEditPreview(
         resizeObjectFromScreenDrag(
           currentObjectResize.original,
@@ -671,6 +828,14 @@ export function EditorCanvas({
     } else {
       setCursorWorld(screenToWorld(point, viewport));
       setHoverPoint(event.pointerType === 'touch' ? null : point);
+      if (event.pointerType !== 'touch') setAltPressed(event.altKey);
+      const nearGroupRotateHandle =
+        tool === 'select' && selectedGroupBounds !== null &&
+        groupObjects.every((object) => !object.locked) &&
+        Math.hypot(
+          point.x - ((selectedGroupBounds.left + selectedGroupBounds.right) / 2 * viewport.scale + viewport.x),
+          point.y - (selectedGroupBounds.top * viewport.scale + viewport.y - 24),
+        ) <= 11;
       const nearHandle =
         tool === 'select' &&
         selectedObject !== undefined &&
@@ -687,7 +852,7 @@ export function EditorCanvas({
         isNearRoomRotationHandle(selectedRoom.vertices, point, viewport);
       const objectHit = tool === 'select' ? hitTestLayoutObject(objects, point, viewport) : null;
       setHoveredObjectHandle(nearHandle);
-      setHoveredObjectRotateHandle(nearRotateHandle);
+      setHoveredObjectRotateHandle(nearRotateHandle || nearGroupRotateHandle);
       setHoveredRoomRotateHandle(nearRoomRotateHandle);
       setHoveredObject(objectHit !== null && !objectHit.locked);
       const hoveredHit =
@@ -700,6 +865,17 @@ export function EditorCanvas({
   }
 
   function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (groupRotate.current?.pointerId === event.pointerId) {
+      const edit = groupRotate.current;
+      groupRotate.current = null;
+      setRotatingObject(false);
+      setObjectMovePreview(null);
+      rotateLayoutObjectGroup(
+        edit.groupId,
+        groupRotationFromScreenDrag(edit.originals, edit.startPoint, localPoint(event), edit.viewport),
+      );
+      return;
+    }
     if (marquee.current?.pointerId === event.pointerId) {
       const selection = marquee.current;
       marquee.current = null;
@@ -839,24 +1015,31 @@ export function EditorCanvas({
     )
       return;
     if (tool === 'object') {
-      if (!selectedPaletteItemId || !selectedPaletteItem) return;
+      if (!selectedObjectSet && (!selectedPaletteItemId || !selectedPaletteItem)) return;
       const center = snapObjectPlacement(
         point,
         viewport,
         objects,
-        objectArrayFootprint(objectPlacement, objectArray),
+        placementFootprint,
         rooms,
       ).center;
-      if (
-        !activeFloorId ||
-        !createLayoutObjectArray(
-          activeFloorId,
-          selectedPaletteItemId,
-          objectArrayCenters(center, objectPlacement, objectArray),
-          objectPlacement,
-          objectArray,
-        )
-      ) {
+      const placed =
+        activeFloorId &&
+        (selectedObjectSet
+          ? createObjectSetArray(
+              activeFloorId,
+              selectedObjectSet.id,
+              objectArrayCenters(center, objectSetFootprint(selectedObjectSet), objectArray),
+              objectArray,
+            )
+          : createLayoutObjectArray(
+              activeFloorId,
+              selectedPaletteItemId!,
+              objectArrayCenters(center, objectPlacement, objectArray),
+              objectPlacement,
+              objectArray,
+            ));
+      if (!placed) {
         setRoomError('가구를 배치할 수 없습니다. 현재 층을 확인해 주세요.');
       } else {
         setRoomError(null);
@@ -979,6 +1162,11 @@ export function EditorCanvas({
       setObjectEditPreview(null);
       setRotatingObject(false);
     }
+    if (groupRotate.current) {
+      groupRotate.current = null;
+      setObjectMovePreview(null);
+      setRotatingObject(false);
+    }
     setDragging(false);
   }, [setRoomEditPreview, setObjectEditPreview, setObjectMovePreview]);
 
@@ -998,6 +1186,7 @@ export function EditorCanvas({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey) setAltPressed(true);
       if (event.defaultPrevented || isTypingTarget(event.target)) return;
       const action = resolveEditorShortcut(event);
       if (!action) return;
@@ -1016,6 +1205,7 @@ export function EditorCanvas({
         objectResize.current ||
         objectMove.current ||
         objectRotate.current ||
+        groupRotate.current ||
         marquee.current ||
         roomClick.current,
       );
@@ -1030,7 +1220,7 @@ export function EditorCanvas({
         } else if (tool === 'room' && roomDraftVertices.length > 0) {
           event.preventDefault();
           undoRoomDraftClick();
-        } else if (tool === 'object' && selectedPaletteItemId) {
+        } else if (tool === 'object' && (selectedPaletteItemId || selectedObjectSetId)) {
           event.preventDefault();
           clearPaletteItem();
         } else if (tool === 'select' && (selectedObjectIds.length > 0 || selectedRoomId)) {
@@ -1075,8 +1265,12 @@ export function EditorCanvas({
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (event.code === 'Space') setSpacePressed(false);
+      if (event.key === 'Alt' || !event.altKey) setAltPressed(false);
     };
-    const onBlur = () => setSpacePressed(false);
+    const onBlur = () => {
+      setSpacePressed(false);
+      setAltPressed(false);
+    };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
@@ -1090,6 +1284,7 @@ export function EditorCanvas({
     selectedObjectIds.length,
     selectedRoomId,
     selectedPaletteItemId,
+    selectedObjectSetId,
     divisionDraft,
     roomDraftVertices.length,
     finishInteraction,
@@ -1105,7 +1300,7 @@ export function EditorCanvas({
     <div className={styles.wrapper}>
       <div
         aria-label="도면 편집 영역"
-        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${tool === 'object' && !selectedPaletteItem && !spacePressed ? styles.objectIdle : ''} ${snapCuePoint ? styles.snapReady : ''} ${tool === 'select' && !spacePressed ? styles.select : ''} ${movingVertex || (!spacePressed && tool === 'select' && hoveredEditVertex) ? styles.vertexDragging : ''} ${movingRoom ? styles.roomDragging : !movingVertex && !spacePressed && tool === 'select' && hoveredRoomInterior ? styles.roomReady : ''} ${!spacePressed && tool === 'select' && hoveredObject ? styles.objectHover : ''} ${movingObject ? styles.objectMoving : ''} ${resizingObject || (!spacePressed && tool === 'select' && hoveredObjectHandle) ? styles.objectResizeCursor : ''} ${rotatingObject || rotatingRoom || (!spacePressed && tool === 'select' && (hoveredObjectRotateHandle || hoveredRoomRotateHandle)) ? styles.objectRotateCursor : ''} ${marqueeRect ? styles.marqueeSelecting : ''}`}
+        className={`${styles.canvas} ${dragging ? styles.dragging : ''} ${spacePressed || tool === 'pan' ? styles.pan : ''} ${tool === 'object' && !selectedPaletteItem && !selectedObjectSet && !spacePressed ? styles.objectIdle : ''} ${snapCuePoint ? styles.snapReady : ''} ${tool === 'select' && !spacePressed ? styles.select : ''} ${movingVertex || (!spacePressed && tool === 'select' && hoveredEditVertex) ? styles.vertexDragging : ''} ${movingRoom ? styles.roomDragging : !movingVertex && !spacePressed && tool === 'select' && hoveredRoomInterior ? styles.roomReady : ''} ${!spacePressed && tool === 'select' && hoveredObject ? styles.objectHover : ''} ${movingObject ? styles.objectMoving : ''} ${resizingObject || (!spacePressed && tool === 'select' && hoveredObjectHandle) ? styles.objectResizeCursor : ''} ${rotatingObject || rotatingRoom || (!spacePressed && tool === 'select' && (hoveredObjectRotateHandle || hoveredRoomRotateHandle)) ? styles.objectRotateCursor : ''} ${marqueeRect ? styles.marqueeSelecting : ''}`}
         onWheel={handleWheel}
         onContextMenu={(event) => {
           if (tool !== 'object') return;
@@ -1208,6 +1403,34 @@ export function EditorCanvas({
                   </g>
                 );
               })}
+          {tool === 'select' && selectedGroupBounds && (
+            <g pointerEvents="none">
+              <rect
+                className={`${styles.objectSelectionBounds} ${groupObjects.some((object) => object.locked) ? styles.lockedSelectionBounds : ''}`}
+                x={selectedGroupBounds.left * viewport.scale + viewport.x}
+                y={selectedGroupBounds.top * viewport.scale + viewport.y}
+                width={(selectedGroupBounds.right - selectedGroupBounds.left) * viewport.scale}
+                height={(selectedGroupBounds.bottom - selectedGroupBounds.top) * viewport.scale}
+              />
+              {groupObjects.every((object) => !object.locked) && (
+                <>
+                  <line
+                    className={styles.objectRotationStem}
+                    x1={(selectedGroupBounds.left + selectedGroupBounds.right) / 2 * viewport.scale + viewport.x}
+                    y1={selectedGroupBounds.top * viewport.scale + viewport.y}
+                    x2={(selectedGroupBounds.left + selectedGroupBounds.right) / 2 * viewport.scale + viewport.x}
+                    y2={selectedGroupBounds.top * viewport.scale + viewport.y - 24}
+                  />
+                  <circle
+                    className={styles.objectRotationHandle}
+                    cx={(selectedGroupBounds.left + selectedGroupBounds.right) / 2 * viewport.scale + viewport.x}
+                    cy={selectedGroupBounds.top * viewport.scale + viewport.y - 24}
+                    r={6}
+                  />
+                </>
+              )}
+            </g>
+          )}
           {tool === 'select' && selectedObject && selectedObjectOrigin && selectedObjectCenter && (
             <g
               transform={`rotate(${selectedObject.rotation} ${selectedObjectCenter.x} ${selectedObjectCenter.y})`}
@@ -1293,6 +1516,15 @@ export function EditorCanvas({
                   y2={placementScreen.y}
                 />
               )}
+              {placementSnap.startLineGuide && (
+                <line
+                  className={styles.objectStartLineGuide}
+                  x1={worldToScreen(placementSnap.startLineGuide[0], viewport).x}
+                  y1={worldToScreen(placementSnap.startLineGuide[0], viewport).y}
+                  x2={worldToScreen(placementSnap.startLineGuide[1], viewport).x}
+                  y2={worldToScreen(placementSnap.startLineGuide[1], viewport).y}
+                />
+              )}
               {placementSnap.gapGuide && (
                 <g className={styles.objectGapGuide}>
                   {[placementSnap.gapGuide.first, placementSnap.gapGuide.second].map(
@@ -1355,6 +1587,13 @@ export function EditorCanvas({
                 );
               })}
             </g>
+          )}
+          {hoveredMeasurement && (
+            <DistanceGuide
+              target={hoveredMeasurement.target}
+              measurement={hoveredMeasurement.measurement}
+              viewport={viewport}
+            />
           )}
           {tool === 'divide' && divisionDraft && (
             <g>
@@ -1460,9 +1699,11 @@ export function EditorCanvas({
                 : tool === 'divide'
                   ? '먼저 공간을 만들어 주세요'
                   : tool === 'object'
-                    ? selectedPaletteItem
-                      ? '도면을 클릭해 물품을 배치하세요'
-                      : '배치할 물품을 선택하세요'
+                    ? selectedObjectSet
+                      ? '도면을 클릭해 세트를 배치하세요'
+                      : selectedPaletteItem
+                        ? '도면을 클릭해 물품을 배치하세요'
+                        : '배치할 물품을 선택하세요'
                     : '새 도면을 시작할 준비가 됐어요'}
             </strong>
             <span>
@@ -1507,9 +1748,11 @@ export function EditorCanvas({
         )}
         {tool === 'object' && (
           <span>
-            {selectedPaletteItem
-              ? '물품 배치: 가로·세로/같은 간격 보정 · 우클릭으로 선택 해제'
-              : '물품을 선택하세요 · V로 선택 도구'}
+            {selectedObjectSet
+              ? '세트 배치: 도면을 클릭하세요 · 우클릭으로 선택 해제'
+              : selectedPaletteItem
+                ? '물품 배치: 가로·세로/같은 간격 보정 · 우클릭으로 선택 해제'
+                : '물품이나 세트를 선택하세요 · V로 선택 도구'}
           </span>
         )}
         {tool === 'select' && (

@@ -10,18 +10,19 @@
 | `src/store/projectStore.ts` | 정규화된 저장 대상 데이터                      | 1일차부터 점진적 확장 |
 | `src/components/editor`     | Grid, SVG/Canvas 렌더링, Pointer 이벤트        | 1~5일차               |
 | `src/features/room`         | 공간 그리기·수정 UI 및 작업 흐름               | 2~3일차               |
-| `src/features/object`       | 오브젝트 Palette·변형·Inspector                | 4일차                 |
+| `src/features/object`       | 오브젝트 Palette·변형·Inspector·세트·배치 보정 | 4·7일차              |
+| `src/features/editor`       | 단축키와 선택 요소 간 거리 측정                | 5·7일차              |
 | `src/features/history`      | Command 실행·Undo/Redo                         | 5일차                 |
-| `src/services`              | Firebase 인증·Repository, DTO 변환             | 7일차                 |
+| `src/services`              | Firebase 인증·Repository, DTO 변환             | 10일차 예정           |
 | `src/features/floor`        | 층 전환·오버레이·연결                          | 6일차                 |
 
 ## 결정 사항
 
 1. 좌표의 저장 단위는 미터로 통일. Grid 기본 간격 1m, 초기 Scale 80px/m. 확대할 때 포인터 아래 World 좌표를 고정합니다.
 2. 렌더러와 Geometry 함수를 분리. Grid는 CSS 배경이고, 그리는 중인 Vertex/Wall과 완성된 Room 및 오브젝트는 SVG로 렌더링합니다. 대량 오브젝트 성능을 실제로 측정한 뒤 Canvas/Konva를 검토합니다.
-3. Firestore 영속 데이터와 에디터 임시 상태를 분리. `projectsById`, `floorsById`, `roomsById`, `objectsById`, `paletteItemsById`로 참조를 정규화합니다.
+3. Firestore 영속 데이터와 에디터 임시 상태를 분리. `projectsById`, `floorsById`, `roomsById`, `objectsById`, `paletteItemsById`, `setTemplatesById`로 참조를 정규화합니다.
 4. Preview나 Pointer 이동 중 임시 좌표는 저장 스냅샷에 넣지 않고, Pointer 종료 시 한 번의 Command로 확정합니다. Project Store의 변경 전후 데이터로 Undo/Redo를 실행하며 기록은 최근 100개까지 유지합니다.
-5. Firebase는 다층 데이터 구조를 완성한 뒤 7일차에 연결합니다. 현재는 로컬 프로젝트와 1F를 Store에 생성하고 층 추가·전환·이름 변경·삭제를 로컬 상태에서 처리합니다. UI 저장 버튼은 비활성입니다. 환경 변수, 실제 Firestore 보안 규칙, 오프라인 동기화는 연결 시 확정합니다.
+5. Firebase는 10일차에 연결합니다. 현재는 로컬 프로젝트와 1F를 Store에 생성하고 층 추가·전환·이름 변경·삭제를 로컬 상태에서 처리합니다. UI 저장 버튼은 비활성입니다. 환경 변수, 실제 Firestore 보안 규칙, 오프라인 동기화는 연결 시 확정합니다.
 
 ## 데이터 흐름 예정
 
@@ -49,6 +50,16 @@ Palette의 기본 항목은 책상·의자이며, 사용자가 추가한 물품�
 
 물품 복사본은 Editor Store의 실행 중 클립보드에 속성 스냅샷으로 보관합니다. 붙여넣기는 새 ID와 0.25m씩 늘어나는 이동량을 적용해 Project Store에 한 번에 추가하고 새 물품을 선택합니다. 잠금은 Project Store의 `LayoutObject.locked`에 기록하며, 변경·이동·삭제 액션에서도 잠금을 검사합니다. 여러 물품을 삭제할 때 잠긴 물품은 남깁니다. 잠긴 물품의 복사본은 새로 편집할 수 있도록 잠금 해제 상태로 생성합니다.
 
+### 7일차: 사용자 세트와 거리 측정
+
+사용자 Palette는 책상·의자를 기본으로 시작하며 PC·모니터·POS·카운터 같은 물품은 필요할 때 직접 등록합니다. `SetBuilder` 작업판은 등록 물품을 배치하고 좌표·크기·회전·모양·색상을 수정해 세트를 만듭니다. `normalizeSetMembers`는 회전된 외곽을 포함해 중심을 구한 뒤 각 물품을 중심 기준 상대 좌표로 복사합니다. 이름과 물품이 있어야 완료할 수 있습니다. 완성된 `ObjectSetTemplate`은 프로젝트의 `setTemplateIds`와 `setTemplatesById`에 저장하고, Palette 원본 변경과 독립적으로 재사용합니다. 제작 중 물품과 선택·Undo/Redo는 `SetBuilder`의 임시 상태이며, 배치·삭제·복제·속성 변경은 기록하고 드래그는 놓을 때 한 번 기록합니다. 세트를 완료하면 템플릿 생성이 Project Store의 한 Command가 됩니다.
+
+세트 배치는 `objectSetFootprint`와 배열 개수·간격으로 중심 좌표를 계산합니다. `snapObjectPlacement`를 세트 작업판과 도면 배치에 같이 사용해 가로·세로 정렬, 같은 간격, 아랫줄 시작선 보정 결과를 미리보기와 확정 좌표에 일치시킵니다. `createObjectSetArray`는 각 배열 칸의 물품에 별도 `groupId`를 부여하고 한 Command로 저장합니다. 물품에는 원본 템플릿을 가리키는 `groupTemplateId`도 남깁니다. 템플릿 수정은 이미 배치된 물품의 외형을 자동 변경하지 않습니다.
+
+보통 선택에서는 같은 `groupId`의 물품 전체를 선택합니다. 선택된 물품을 함께 이동하고 그룹 중심 주위로 각 물품의 중심과 회전 각도를 바꿉니다. 회전 손잡이의 직각 보정과 90° 버튼을 제공하며, 드래그 미리보기는 Editor Store에 두고 놓을 때 Project Store에 한 Command로 확정합니다. 그룹 복제·붙여넣기와 층 복사는 새 `groupId`를 만들어 원본 그룹과 독립시킵니다. 내부 편집 모드에서는 한 구성 물품만 선택해 기존 물품 편집 기능을 적용하고, 변경은 현재 배치된 그룹에만 남깁니다. 내부 편집에서 물품 하나를 복사하면 그룹 관계를 제외한 개별 물품으로 복사합니다. 그룹 선택·내부 편집 모드는 `editorStore`의 임시 상태입니다.
+
+Alt를 누른 채 다른 공간 또는 물품 위에 포인터를 올리면 `src/features/editor/measurement.ts`가 회전된 외곽을 포함한 두 요소의 최소 거리를 World 미터 단위로 계산합니다. 거리선·값·대상 윤곽은 `EditorCanvas`의 임시 SVG 가이드이며 프로젝트 데이터와 Command에 포함하지 않습니다.
+
 `src/features/history/command.ts`의 Command는 정규화된 프로젝트 데이터의 변경 전후 상태를 보관합니다. Project Store 액션이 실제로 데이터를 바꿀 때 한 Command를 추가하고 Redo 기록을 비웁니다. 드래그 중 미리보기, 선택, Viewport, 복사 클립보드는 Command에 포함하지 않습니다. 되돌리기와 다시 실행 뒤에는 존재하지 않는 선택 항목을 해제합니다. 목표 면적과 물품 색상 입력은 확정 시 한 번 Store에 전달합니다. 기록은 실행 중에만 유지하고 프로젝트 데이터를 새로 불러오면 초기화합니다.
 
 키 조합은 `src/features/editor/shortcuts.ts`에서 편집 동작으로 해석하고 Canvas가 현재 도구·선택·제스처 상태에 따라 실행합니다. 도구 버튼에 표시하는 알파벳도 같은 매핑을 사용합니다. 입력 필드·IME 조합 중에는 편집기 단축키를 실행하지 않고, 버튼·링크에 포커스가 있으면 Space의 기본 활성화 동작을 유지합니다. 드래그 중에는 `Esc`가 미리보기를 취소하며 Undo/Redo와 도구 전환은 드래그 종료 후 사용합니다.
@@ -65,4 +76,4 @@ Palette의 기본 항목은 책상·의자이며, 사용자가 추가한 물품�
 
 ## 범위 경계
 
-V1.0은 한 층의 공간 그리기, 실면적, 기본 가구 편집, Undo/Redo, 인증과 저장/복원, 배포까지입니다. 다층 연결과 상업용 그룹은 V1.1, PC Station 자동 배치는 V1.2입니다. 전문 CAD·BIM·건축 구조 계산은 대상이 아닙니다.
+현재 구현에는 다층 연결과 사용자 세트·그룹 편집이 포함됩니다. 자동 배치·3D 미리보기·Firebase 저장·첫 배포는 로드맵의 8~11일차 작업입니다. 전문 CAD·BIM·건축 구조 계산은 대상이 아닙니다.

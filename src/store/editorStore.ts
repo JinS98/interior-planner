@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { LayoutObject, ObjectAppearance, PaletteItem, Point, Viewport } from '../types/layout';
 import type { RoomEditError } from '../features/room/edit';
 import { defaultObjectAppearance, isValidObjectAppearance } from '../features/object/catalog';
+import { groupMemberIds } from '../features/object/group';
 import { LOCAL_FLOOR_ID, LOCAL_PROJECT_ID, useProjectStore } from './projectStore';
 
 export type EditorTool = 'select' | 'room' | 'divide' | 'object' | 'pan';
@@ -10,8 +11,10 @@ interface EditorState {
   activeProjectId: string | null;
   activeFloorId: string | null;
   selectedObjectIds: string[];
+  editingGroupId: string | null;
   tool: EditorTool;
   selectedPaletteItemId: string | null;
+  selectedObjectSetId: string | null;
   objectPlacement: ObjectAppearance;
   objectEditPreview: LayoutObject | null;
   objectMovePreviewById: Record<string, LayoutObject> | null;
@@ -27,11 +30,14 @@ interface EditorState {
   setActiveFloor: (floorId: string) => boolean;
   setTool: (tool: EditorTool) => void;
   setPaletteItem: (item: PaletteItem) => void;
+  setObjectSet: (setId: string) => void;
   clearPaletteItem: () => void;
   setObjectPlacement: (patch: Partial<ObjectAppearance>) => void;
   selectObject: (objectId: string | null) => void;
   selectObjects: (objectIds: string[]) => void;
   toggleObjectSelection: (objectId: string) => void;
+  startGroupInternalEdit: (groupId: string) => void;
+  finishGroupInternalEdit: () => void;
   setObjectEditPreview: (preview: LayoutObject | null) => void;
   setObjectMovePreview: (preview: Record<string, LayoutObject> | null) => void;
   copyObjects: (objects: LayoutObject[]) => void;
@@ -56,8 +62,10 @@ export const useEditorStore = create<EditorState>((set) => ({
   activeProjectId: LOCAL_PROJECT_ID,
   activeFloorId: LOCAL_FLOOR_ID,
   selectedObjectIds: [],
+  editingGroupId: null,
   tool: 'select',
   selectedPaletteItemId: null,
+  selectedObjectSetId: null,
   objectPlacement: defaultObjectAppearance('desk'),
   objectEditPreview: null,
   objectMovePreviewById: null,
@@ -80,6 +88,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       return {
         activeFloorId: floorId,
         selectedObjectIds: [],
+        editingGroupId: null,
         selectedRoomId: null,
         selectedWallIndex: null,
         roomDraftVertices: [],
@@ -94,10 +103,16 @@ export const useEditorStore = create<EditorState>((set) => ({
     });
     return switched;
   },
-  setTool: (tool) => set((state) => (state.tool === tool ? state : { tool, divisionDraft: null })),
+  setTool: (tool) =>
+    set((state) =>
+      state.tool === tool
+        ? state
+        : { tool, divisionDraft: null, editingGroupId: tool === 'select' ? state.editingGroupId : null },
+    ),
   setPaletteItem: (item) =>
     set({
       selectedPaletteItemId: item.id,
+      selectedObjectSetId: null,
       objectPlacement: {
         width: item.width,
         height: item.height,
@@ -105,37 +120,102 @@ export const useEditorStore = create<EditorState>((set) => ({
         shape: item.shape,
       },
       tool: 'object',
+      editingGroupId: null,
       divisionDraft: null,
     }),
-  clearPaletteItem: () => set({ selectedPaletteItemId: null }),
+  setObjectSet: (selectedObjectSetId) =>
+    set({
+      selectedPaletteItemId: null,
+      selectedObjectSetId,
+      tool: 'object',
+      editingGroupId: null,
+      divisionDraft: null,
+    }),
+  clearPaletteItem: () => set({ selectedPaletteItemId: null, selectedObjectSetId: null }),
   setObjectPlacement: (patch) =>
     set((state) => {
       const objectPlacement = { ...state.objectPlacement, ...patch };
       return isValidObjectAppearance(objectPlacement) ? { objectPlacement } : state;
     }),
   selectObject: (objectId) =>
-    set({
-      selectedObjectIds: objectId ? [objectId] : [],
-      selectedRoomId: null,
-      selectedWallIndex: null,
-      geometryError: null,
+    set((state) => {
+      const project = useProjectStore.getState();
+      const object = objectId ? project.objectsById[objectId] : null;
+      const groupId = object?.groupId;
+      const editingGroupId = groupId === state.editingGroupId ? state.editingGroupId : null;
+      const floorObjects = (project.floorsById[state.activeFloorId ?? '']?.objectIds ?? [])
+        .map((id) => project.objectsById[id])
+        .filter((item) => item != null);
+      return {
+        selectedObjectIds: objectId
+          ? groupId && !editingGroupId
+            ? groupMemberIds(floorObjects, groupId)
+            : [objectId]
+          : [],
+        editingGroupId: object ? editingGroupId : null,
+        selectedRoomId: null,
+        selectedWallIndex: null,
+        geometryError: null,
+      };
     }),
   selectObjects: (objectIds) =>
-    set({
-      selectedObjectIds: [...new Set(objectIds)],
-      selectedRoomId: null,
-      selectedWallIndex: null,
-      geometryError: null,
+    set((state) => {
+      const project = useProjectStore.getState();
+      const floorObjects = (project.floorsById[state.activeFloorId ?? '']?.objectIds ?? [])
+        .map((id) => project.objectsById[id])
+        .filter((item) => item != null);
+      const expanded = objectIds.flatMap((id) => {
+        const object = project.objectsById[id];
+        return object?.groupId ? groupMemberIds(floorObjects, object.groupId) : [id];
+      });
+      return {
+        selectedObjectIds: [...new Set(expanded)],
+        editingGroupId: null,
+        selectedRoomId: null,
+        selectedWallIndex: null,
+        geometryError: null,
+      };
     }),
   toggleObjectSelection: (objectId) =>
-    set((state) => ({
-      selectedObjectIds: state.selectedObjectIds.includes(objectId)
-        ? state.selectedObjectIds.filter((id) => id !== objectId)
-        : [...state.selectedObjectIds, objectId],
-      selectedRoomId: null,
-      selectedWallIndex: null,
-      geometryError: null,
-    })),
+    set((state) => {
+      const project = useProjectStore.getState();
+      const object = project.objectsById[objectId];
+      const floorObjects = (project.floorsById[state.activeFloorId ?? '']?.objectIds ?? [])
+        .map((id) => project.objectsById[id])
+        .filter((item) => item != null);
+      const ids = object?.groupId && state.editingGroupId !== object.groupId
+        ? groupMemberIds(floorObjects, object.groupId)
+        : [objectId];
+      const current = new Set(state.selectedObjectIds);
+      if (ids.every((id) => current.has(id))) ids.forEach((id) => current.delete(id));
+      else ids.forEach((id) => current.add(id));
+      return {
+        selectedObjectIds: [...current],
+        selectedRoomId: null,
+        selectedWallIndex: null,
+        geometryError: null,
+      };
+    }),
+  startGroupInternalEdit: (groupId) =>
+    set((state) => {
+      const firstId = state.selectedObjectIds.find(
+        (id) => useProjectStore.getState().objectsById[id]?.groupId === groupId,
+      );
+      return firstId ? { editingGroupId: groupId, selectedObjectIds: [firstId] } : state;
+    }),
+  finishGroupInternalEdit: () =>
+    set((state) => {
+      const project = useProjectStore.getState();
+      const floorObjects = (project.floorsById[state.activeFloorId ?? '']?.objectIds ?? [])
+        .map((id) => project.objectsById[id])
+        .filter((item) => item != null);
+      return {
+        selectedObjectIds: state.editingGroupId
+          ? groupMemberIds(floorObjects, state.editingGroupId)
+          : state.selectedObjectIds,
+        editingGroupId: null,
+      };
+    }),
   setObjectEditPreview: (objectEditPreview) => set({ objectEditPreview }),
   setObjectMovePreview: (objectMovePreviewById) => set({ objectMovePreviewById }),
   copyObjects: (objects) =>
@@ -171,6 +251,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selectedRoomId: roomId,
       selectedWallIndex: null,
       selectedObjectIds: [],
+      editingGroupId: null,
       geometryError: null,
     }),
   selectWall: (roomId, wallIndex) =>
@@ -178,6 +259,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selectedRoomId: roomId,
       selectedWallIndex: wallIndex,
       selectedObjectIds: [],
+      editingGroupId: null,
       geometryError: null,
     }),
   setRoomEditPreview: (preview) => set({ roomEditPreview: preview }),

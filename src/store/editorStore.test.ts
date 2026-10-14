@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { LOCAL_FLOOR_ID, useProjectStore } from './projectStore';
+import { layoutObjectFromPaletteItem } from '../features/object/catalog';
+import { LOCAL_FLOOR_ID, LOCAL_PROJECT_ID, useProjectStore } from './projectStore';
 import { useEditorStore } from './editorStore';
 
 describe('clearRoomDraft', () => {
@@ -59,6 +60,30 @@ describe('undoing draft clicks', () => {
 });
 
 describe('selecting a furniture preset', () => {
+  it('switches between a set and a single item, and clears either selection', () => {
+    const store = useEditorStore.getState();
+    store.setPaletteItem(useProjectStore.getState().paletteItemsById.desk);
+    store.setObjectSet('my-set');
+    expect(useEditorStore.getState()).toMatchObject({
+      tool: 'object',
+      selectedPaletteItemId: null,
+      selectedObjectSetId: 'my-set',
+    });
+    store.setPaletteItem(useProjectStore.getState().paletteItemsById.chair);
+    expect(useEditorStore.getState()).toMatchObject({
+      selectedPaletteItemId: 'chair',
+      selectedObjectSetId: null,
+    });
+    store.setObjectSet('another-set');
+    store.clearPaletteItem();
+    expect(useEditorStore.getState()).toMatchObject({
+      tool: 'object',
+      selectedPaletteItemId: null,
+      selectedObjectSetId: null,
+    });
+    store.setTool('select');
+  });
+
   it('returns to an unselected object tool state without changing tools or objects', () => {
     const store = useEditorStore.getState();
     const before = useProjectStore.getState().objectsById;
@@ -124,5 +149,35 @@ describe('multi selection', () => {
     expect(useEditorStore.getState().selectedObjectIds).toEqual(['desk-1', 'chair-1']);
     store.selectObjects([]);
     expect(useEditorStore.getState().selectedObjectIds).toEqual([]);
+  });
+
+  it('selects a placed set together and switches to individual member editing', () => {
+    const project = useProjectStore.getState();
+    const desk = project.paletteItemsById.desk;
+    const chair = project.paletteItemsById.chair;
+    const template = project.addSetTemplate(LOCAL_PROJECT_ID, '선택 테스트', [
+      layoutObjectFromPaletteItem('builder', desk, { x: 0, y: 0 }, 'select-desk'),
+      layoutObjectFromPaletteItem('builder', chair, { x: 0, y: 1 }, 'select-chair'),
+    ])!;
+    const before = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds.length;
+    expect(project.createObjectSetArray(LOCAL_FLOOR_ID, template.id, [{ x: 8, y: 8 }], {
+      columns: 1, rows: 1, gapX: 0, gapY: 0,
+    })).toBe(true);
+    const ids = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds.slice(before);
+    const groupId = useProjectStore.getState().objectsById[ids[0]].groupId!;
+    const editor = useEditorStore.getState();
+    editor.selectObject(ids[0]);
+    expect(useEditorStore.getState().selectedObjectIds).toEqual(ids);
+    editor.startGroupInternalEdit(groupId);
+    expect(useEditorStore.getState().selectedObjectIds).toEqual([ids[0]]);
+    editor.selectObject(ids[1]);
+    expect(useEditorStore.getState().selectedObjectIds).toEqual([ids[1]]);
+    editor.finishGroupInternalEdit();
+    expect(useEditorStore.getState().selectedObjectIds).toEqual(ids);
+    editor.toggleObjectSelection(ids[1]);
+    expect(useEditorStore.getState().selectedObjectIds).toEqual([]);
+    editor.selectObjects([ids[1]]);
+    expect(useEditorStore.getState().selectedObjectIds).toEqual(ids);
+    editor.selectObject(null);
   });
 });

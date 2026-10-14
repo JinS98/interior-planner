@@ -1,4 +1,11 @@
-import type { Floor, LayoutObject, PaletteItem, Project, Room } from '../../types/layout';
+import type {
+  Floor,
+  LayoutObject,
+  ObjectSetTemplate,
+  PaletteItem,
+  Project,
+  Room,
+} from '../../types/layout';
 
 /** 저장 대상 데이터만 담는다. 선택, Viewport, 드래그 미리보기는 제외한다. */
 export interface ProjectSnapshot {
@@ -7,6 +14,7 @@ export interface ProjectSnapshot {
   roomsById: Record<string, Room>;
   objectsById: Record<string, LayoutObject>;
   paletteItemsById: Record<string, PaletteItem>;
+  setTemplatesById: Record<string, ObjectSetTemplate>;
 }
 
 export interface EditCommand {
@@ -24,5 +32,6 @@ export function projectSnapshot(data: ProjectSnapshot): ProjectSnapshot {
     roomsById: data.roomsById,
     objectsById: data.objectsById,
     paletteItemsById: data.paletteItemsById,
+    setTemplatesById: data.setTemplatesById,
   };
 }

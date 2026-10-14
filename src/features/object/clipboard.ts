@@ -9,7 +9,16 @@ export function copySelectedObjects(): number {
     .map((id) => objectsById[id])
     .filter((object) => object && object.floorId === editor.activeFloorId);
   if (objects.length === 0) return 0;
-  editor.copyObjects(objects);
+  editor.copyObjects(
+    editor.editingGroupId
+      ? objects.map((object) => {
+          const { groupId: _groupId, groupTemplateId: _groupTemplateId, ...individual } = object;
+          void _groupId;
+          void _groupTemplateId;
+          return individual;
+        })
+      : objects,
+  );
   return objects.length;
 }
 

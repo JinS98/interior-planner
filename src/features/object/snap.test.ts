@@ -73,6 +73,19 @@ describe('snapObjectPlacement', () => {
     expect(snap.gapGuide?.meters).toBeCloseTo(1);
   });
 
+  it('keeps horizontal spacing when different sized objects share a top edge', () => {
+    const right = pc({ x: 3, y: 1.9 }, 'pc-right');
+    const snap = snapObjectPlacement(
+      worldToScreen({ x: 4.64, y: 1.96 }, viewport),
+      viewport,
+      [desk, right],
+      pcItem,
+    );
+    expect(snap.center.x).toBeCloseTo(4.6);
+    expect(snap.center.y).toBeCloseTo(1.9);
+    expect(snap.gapGuide?.meters).toBeCloseTo(1);
+  });
+
   it('does not claim equal spacing for objects on different rows', () => {
     const lowerChair = layoutObjectFromPreset('floor-1', 'chair', { x: 3, y: 2.3 }, 'chair-2');
     const snap = snapObjectPlacement(
@@ -126,6 +139,44 @@ describe('snapObjectPlacement', () => {
     expect(first.x - (chair.x + chair.width)).toBeCloseTo(1);
   });
 
+  it('aligns the first edge of a new horizontal array beneath an existing row', () => {
+    const first = layoutObjectFromPreset('floor-1', 'desk', { x: 1.35, y: 1.1 }, 'row-1');
+    const second = layoutObjectFromPreset('floor-1', 'desk', { x: 3.35, y: 1.1 }, 'row-2');
+    const options = { columns: 2, rows: 1, gapX: 0.6, gapY: 0 };
+    const snap = snapObjectPlacement(
+      worldToScreen({ x: 2.43, y: 2.55 }, viewport),
+      viewport,
+      [first, second],
+      objectArrayFootprint(first, options),
+    );
+    const placed = objectArrayCenters(snap.center, first, options);
+    expect(placed[0].x - first.width / 2).toBeCloseTo(first.x);
+    expect(snap.startLineGuide?.[0].x).toBeCloseTo(first.x);
+    expect(snap.startLineGuide?.[1].x).toBeCloseTo(first.x);
+
+    const away = snapObjectPlacement(
+      worldToScreen({ x: 2.7, y: 2.55 }, viewport),
+      viewport,
+      [first, second],
+      objectArrayFootprint(first, options),
+    );
+    expect(away.startLineGuide).toBeUndefined();
+  });
+
+  it('also aligns a single item left edge below a row without changing its height', () => {
+    const first = layoutObjectFromPreset('floor-1', 'desk', { x: 1.35, y: 1.1 }, 'row-1');
+    const second = layoutObjectFromPreset('floor-1', 'desk', { x: 3.35, y: 1.1 }, 'row-2');
+    const snap = snapObjectPlacement(
+      worldToScreen({ x: 1.03, y: 2.55 }, viewport),
+      viewport,
+      [first, second],
+      pcItem,
+    );
+    expect(snap.center.x - pcItem.width / 2).toBeCloseTo(first.x);
+    expect(snap.center.y).toBeCloseTo(2.55);
+    expect(snap.startLineGuide).toBeDefined();
+  });
+
   it('extends a column with equal spacing when placing one object', () => {
     const bottom = layoutObjectFromPreset('floor-1', 'desk', { x: 1, y: 4 }, 'desk-2');
     const snap = snapObjectPlacement(
@@ -137,6 +188,37 @@ describe('snapObjectPlacement', () => {
     expect(snap.center.x).toBe(1);
     expect(snap.center.y).toBeCloseTo(5.95);
     expect(snap.gapGuide?.meters).toBeCloseTo(1.3);
+  });
+
+  it('keeps vertical spacing when different sized objects share a left edge', () => {
+    const lower = pc({ x: 0.6, y: 4 }, 'pc-lower');
+    const snap = snapObjectPlacement(
+      worldToScreen({ x: 0.64, y: 5.95 }, viewport),
+      viewport,
+      [desk, lower],
+      pcItem,
+    );
+    expect(snap.center.x).toBeCloseTo(0.6);
+    expect(snap.center.y).toBeCloseTo(5.9);
+    expect(snap.gapGuide?.meters).toBeCloseTo(1.4);
+    expect(snap.gapGuide!.first[1].y - snap.gapGuide!.first[0].y).toBeCloseTo(1.4);
+    expect(snap.gapGuide!.second[1].y - snap.gapGuide!.second[0].y).toBeCloseTo(1.4);
+  });
+
+  it('uses the entire array footprint for vertical equal spacing', () => {
+    const lower = pc({ x: 0.6, y: 4 }, 'pc-lower');
+    const options = { columns: 1, rows: 2, gapX: 0, gapY: 0.2 };
+    const snap = snapObjectPlacement(
+      worldToScreen({ x: 0.61, y: 6.3 }, viewport),
+      viewport,
+      [desk, lower],
+      objectArrayFootprint(pcItem, options),
+    );
+    expect(snap.center.x).toBeCloseTo(0.6);
+    expect(snap.center.y).toBeCloseTo(6.25);
+    expect(snap.gapGuide?.meters).toBeCloseTo(1.4);
+    const first = pc(objectArrayCenters(snap.center, pcItem, options)[0], 'array-first');
+    expect(first.y - (lower.y + lower.height)).toBeCloseTo(1.4);
   });
 
   it('keeps zero spacing after an adjacent two-object placement', () => {

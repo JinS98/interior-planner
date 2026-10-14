@@ -23,6 +23,9 @@ export function LayoutObjectShape({
         className={`${styles.layoutObject} ${preview ? styles.objectPreview : ''} ${object.locked ? styles.lockedObject : ''} ${object.floorConnectionId ? styles.floorConnector : ''}`}
         transform={`translate(${origin.x} ${origin.y}) rotate(${object.rotation} ${width / 2} ${height / 2})`}
         style={{ color: object.color }}
+        fill="currentColor"
+        stroke="#40516b"
+        strokeWidth={2}
         data-type={object.type}
       >
         {connectionLabel && (

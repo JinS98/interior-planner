@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { polygonArea } from '../domain/geometry/coordinates';
 import { translateObjectFromScreenDrag } from '../features/object/edit';
+import { layoutObjectFromPaletteItem } from '../features/object/catalog';
 import { LOCAL_FLOOR_ID, LOCAL_PROJECT_ID, useProjectStore } from './projectStore';
 
 describe('createRoom', () => {
@@ -178,6 +179,125 @@ describe('addPaletteItem', () => {
     expect(useProjectStore.getState().projectsById[LOCAL_PROJECT_ID].paletteItemIds).toHaveLength(
       before + 1,
     );
+  });
+});
+
+describe('custom object sets', () => {
+  it('saves arranged items as an independent template and places an array in one command', () => {
+    const store = useProjectStore.getState();
+    const palette = store.paletteItemsById;
+    const source = [
+      {
+        ...layoutObjectFromPaletteItem('builder', palette.desk, { x: 0, y: 0 }, 'desk-source'),
+        color: '#E48A98',
+        rotation: 90,
+      },
+      layoutObjectFromPaletteItem('builder', palette.chair, { x: 0, y: 1 }, 'chair-source'),
+    ];
+    const beforeTemplates = store.projectsById[LOCAL_PROJECT_ID].setTemplateIds.length;
+    const template = store.addSetTemplate(LOCAL_PROJECT_ID, '  내 좌석  ', source)!;
+    expect(template.name).toBe('내 좌석');
+    expect(template.members).toHaveLength(2);
+    expect(template.members[0]).toMatchObject({ color: '#E48A98', rotation: 90 });
+    expect(useProjectStore.getState().projectsById[LOCAL_PROJECT_ID].setTemplateIds).toHaveLength(
+      beforeTemplates + 1,
+    );
+    source[0].width = 4;
+    expect(useProjectStore.getState().setTemplatesById[template.id].members[0].width).toBe(1.4);
+    const beforeObjects = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds;
+    const beforeHistory = useProjectStore.getState().historyPast.length;
+    const options = { columns: 2, rows: 1, gapX: 0.4, gapY: 0 };
+    expect(
+      store.createObjectSetArray(
+        LOCAL_FLOOR_ID,
+        template.id,
+        [
+          { x: 3, y: 3 },
+          { x: 5, y: 3 },
+        ],
+        options,
+      ),
+    ).toBe(true);
+    expect(useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds).toHaveLength(
+      beforeObjects.length + 4,
+    );
+    const placedIds = useProjectStore
+      .getState()
+      .floorsById[LOCAL_FLOOR_ID].objectIds.slice(beforeObjects.length);
+    expect(useProjectStore.getState().objectsById[placedIds[0]]).toMatchObject({
+      color: '#E48A98',
+      rotation: 90,
+      width: 1.4,
+    });
+    const placed = placedIds.map((id) => useProjectStore.getState().objectsById[id]);
+    expect(placed[0].groupId).toBe(placed[1].groupId);
+    expect(placed[2].groupId).toBe(placed[3].groupId);
+    expect(placed[0].groupId).not.toBe(placed[2].groupId);
+    expect(placed.every((object) => object.groupTemplateId === template.id)).toBe(true);
+    expect(useProjectStore.getState().historyPast).toHaveLength(beforeHistory + 1);
+    expect(store.undo()).toBe(true);
+    expect(useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds).toEqual(beforeObjects);
+    expect(store.redo()).toBe(true);
+    expect(useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds).toHaveLength(
+      beforeObjects.length + 4,
+    );
+    expect(
+      store.createObjectSetArray('missing-floor', template.id, [{ x: 0, y: 0 }], {
+        columns: 1,
+        rows: 1,
+        gapX: 0,
+        gapY: 0,
+      }),
+    ).toBe(false);
+    expect(
+      store.createObjectSetArray(LOCAL_FLOOR_ID, template.id, [{ x: NaN, y: 0 }], {
+        columns: 1,
+        rows: 1,
+        gapX: 0,
+        gapY: 0,
+      }),
+    ).toBe(false);
+    expect(store.addSetTemplate(LOCAL_PROJECT_ID, '', source)).toBeNull();
+    expect(store.addSetTemplate(LOCAL_PROJECT_ID, '빈 세트', [])).toBeNull();
+  });
+
+  it('moves, rotates, duplicates, and edits a placed group with independent instances', () => {
+    const store = useProjectStore.getState();
+    const palette = store.paletteItemsById;
+    const template = store.addSetTemplate(LOCAL_PROJECT_ID, '그룹 검증', [
+      layoutObjectFromPaletteItem('builder', palette.desk, { x: 0, y: 0 }, 'group-desk'),
+      layoutObjectFromPaletteItem('builder', palette.chair, { x: 0, y: 1 }, 'group-chair'),
+    ])!;
+    const before = store.floorsById[LOCAL_FLOOR_ID].objectIds.length;
+    expect(store.createObjectSetArray(LOCAL_FLOOR_ID, template.id, [{ x: 4, y: 4 }], {
+      columns: 1, rows: 1, gapX: 0, gapY: 0,
+    })).toBe(true);
+    const ids = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds.slice(before);
+    const originals = ids.map((id) => useProjectStore.getState().objectsById[id]);
+    expect(store.moveLayoutObjects(ids, { x: 1, y: -1 })).toBe(true);
+    expect(useProjectStore.getState().objectsById[ids[0]].x).toBeCloseTo(originals[0].x + 1);
+    const moved = ids.map((id) => useProjectStore.getState().objectsById[id]);
+    const beforeHistory = useProjectStore.getState().historyPast.length;
+    expect(store.rotateLayoutObjectGroup(moved[0].groupId!, 90)).toBe(true);
+    expect(useProjectStore.getState().historyPast).toHaveLength(beforeHistory + 1);
+    const rotated = ids.map((id) => useProjectStore.getState().objectsById[id]);
+    expect(rotated[0].rotation).toBe(90);
+    expect(rotated[1].rotation).toBe(90);
+    expect(
+      (rotated[0].y + rotated[0].height / 2) - (rotated[1].y + rotated[1].height / 2),
+    ).toBeCloseTo(0);
+    expect(store.undo()).toBe(true);
+    expect(useProjectStore.getState().objectsById[ids[0]]).toEqual(moved[0]);
+    expect(store.redo()).toBe(true);
+    const copyIds = store.duplicateLayoutObjects(LOCAL_FLOOR_ID, rotated, { x: 0.25, y: 0.25 });
+    const copies = copyIds.map((id) => useProjectStore.getState().objectsById[id]);
+    expect(copies).toHaveLength(2);
+    expect(copies[0].groupId).toBe(copies[1].groupId);
+    expect(copies[0].groupId).not.toBe(rotated[0].groupId);
+    expect(store.updateLayoutObject(copyIds[0], { color: '#123456' })).toBe(true);
+    expect(useProjectStore.getState().objectsById[copyIds[0]].color).toBe('#123456');
+    expect(useProjectStore.getState().objectsById[copyIds[1]].color).not.toBe('#123456');
+    expect(useProjectStore.getState().objectsById[ids[0]].color).not.toBe('#123456');
   });
 });
 

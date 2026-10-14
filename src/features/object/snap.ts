@@ -15,6 +15,7 @@ export interface ObjectPlacementSnap {
   horizontalReference: Point | null;
   verticalReference: Point | null;
   gapGuide: GapGuide | null;
+  startLineGuide?: [Point, Point];
   grid: boolean;
   roomBoundary: boolean;
 }
@@ -110,116 +111,148 @@ export function snapObjectPlacement(
     distance: number;
   } | null = null;
   let verticalGapGuide: GapGuide | null = null;
-  const rows: LayoutObject[][] = [];
-  for (const object of [...objects].sort((a, b) => centerOf(a).y - centerOf(b).y)) {
-    const row = rows.at(-1);
-    if (row && Math.abs(centerOf(row[0]).y - centerOf(object).y) * viewport.scale <= 2) {
-      row.push(object);
-    } else {
-      rows.push([object]);
+  for (const alignment of ['center', 'start', 'end'] as const) {
+    const rowAnchor = (object: LayoutObject) =>
+      alignment === 'start'
+        ? object.y
+        : alignment === 'end'
+          ? object.y + object.height
+          : centerOf(object).y;
+    const rows: LayoutObject[][] = [];
+    for (const object of [...objects].sort((a, b) => rowAnchor(a) - rowAnchor(b))) {
+      const row = rows.at(-1);
+      if (row && Math.abs(rowAnchor(row[0]) - rowAnchor(object)) * viewport.scale <= 2) {
+        row.push(object);
+      } else {
+        rows.push([object]);
+      }
     }
-  }
-  for (const row of rows) {
-    row.sort((a, b) => a.x - b.x);
-    for (let index = 0; index < row.length - 1; index += 1) {
-      const left = row[index];
-      const right = row[index + 1];
-      const rowY = centerOf(left).y;
-      const rawGap = right.x - (left.x + left.width);
-      const gap = Math.abs(rawGap) < 1e-9 ? 0 : rawGap;
-      if (gap < -1e-9) continue;
+    for (const row of rows) {
+      row.sort((a, b) => a.x - b.x);
+      for (let index = 0; index < row.length - 1; index += 1) {
+        const left = row[index];
+        const right = row[index + 1];
+        const rowY = rowAnchor(left);
+        const rawGap = right.x - (left.x + left.width);
+        const gap = Math.abs(rawGap) < 1e-9 ? 0 : rawGap;
+        if (gap < -1e-9) continue;
 
-      for (const side of ['left', 'right'] as const) {
-        const center = {
-          x:
-            side === 'right'
-              ? right.x + right.width + gap + preset.width / 2
-              : left.x - gap - preset.width / 2,
-          y: rowY,
-        };
-        const target = worldToScreen(center, viewport);
-        const distance = Math.hypot(pointer.x - target.x, pointer.y - target.y);
-        if (distance > OBJECT_SNAP_RADIUS_PX || (spacing && distance >= spacing.distance)) continue;
-        const candidateLeft = center.x - preset.width / 2;
-        const candidateRight = center.x + preset.width / 2;
-        if (
-          objects.some(
-            (object) =>
-              object.x < candidateRight - 1e-9 &&
-              object.x + object.width > candidateLeft + 1e-9 &&
-              object.y < center.y + preset.height / 2 - 1e-9 &&
-              object.y + object.height > center.y - preset.height / 2 + 1e-9,
+        for (const side of ['left', 'right'] as const) {
+          const center = {
+            x:
+              side === 'right'
+                ? right.x + right.width + gap + preset.width / 2
+                : left.x - gap - preset.width / 2,
+            y:
+              alignment === 'start'
+                ? rowY + preset.height / 2
+                : alignment === 'end'
+                  ? rowY - preset.height / 2
+                  : rowY,
+          };
+          const target = worldToScreen(center, viewport);
+          const distance = Math.hypot(pointer.x - target.x, pointer.y - target.y);
+          if (distance > OBJECT_SNAP_RADIUS_PX || (spacing && distance >= spacing.distance))
+            continue;
+          const candidateLeft = center.x - preset.width / 2;
+          const candidateRight = center.x + preset.width / 2;
+          if (
+            objects.some(
+              (object) =>
+                object.x < candidateRight - 1e-9 &&
+                object.x + object.width > candidateLeft + 1e-9 &&
+                object.y < center.y + preset.height / 2 - 1e-9 &&
+                object.y + object.height > center.y - preset.height / 2 + 1e-9,
+            )
           )
-        )
-          continue;
-        spacing = { center, left, right, gap, side, distance };
+            continue;
+          spacing = { center, left, right, gap, side, distance };
+        }
       }
     }
   }
-  const columns: LayoutObject[][] = [];
-  for (const object of [...objects].sort((a, b) => centerOf(a).x - centerOf(b).x)) {
-    const column = columns.at(-1);
-    if (column && Math.abs(centerOf(column[0]).x - centerOf(object).x) * viewport.scale <= 2) {
-      column.push(object);
-    } else {
-      columns.push([object]);
+  for (const alignment of ['center', 'start', 'end'] as const) {
+    const columnAnchor = (object: LayoutObject) =>
+      alignment === 'start'
+        ? object.x
+        : alignment === 'end'
+          ? object.x + object.width
+          : centerOf(object).x;
+    const columns: LayoutObject[][] = [];
+    for (const object of [...objects].sort((a, b) => columnAnchor(a) - columnAnchor(b))) {
+      const column = columns.at(-1);
+      if (
+        column &&
+        Math.abs(columnAnchor(column[0]) - columnAnchor(object)) * viewport.scale <= 2
+      ) {
+        column.push(object);
+      } else {
+        columns.push([object]);
+      }
     }
-  }
-  for (const column of columns) {
-    column.sort((a, b) => a.y - b.y);
-    for (let index = 0; index < column.length - 1; index += 1) {
-      const top = column[index];
-      const bottom = column[index + 1];
-      const rawGap = bottom.y - (top.y + top.height);
-      const gap = Math.abs(rawGap) < 1e-9 ? 0 : rawGap;
-      if (gap < -1e-9) continue;
-      for (const side of ['top', 'bottom'] as const) {
-        const center = {
-          x: centerOf(top).x,
-          y:
-            side === 'bottom'
-              ? bottom.y + bottom.height + gap + preset.height / 2
-              : top.y - gap - preset.height / 2,
-        };
-        const target = worldToScreen(center, viewport);
-        const distance = Math.hypot(pointer.x - target.x, pointer.y - target.y);
-        if (distance > OBJECT_SNAP_RADIUS_PX || (spacing && distance >= spacing.distance)) continue;
-        const candidateTop = center.y - preset.height / 2;
-        const candidateBottom = center.y + preset.height / 2;
-        if (
-          objects.some(
-            (object) =>
-              object.y < candidateBottom - 1e-9 &&
-              object.y + object.height > candidateTop + 1e-9 &&
-              object.x < center.x + preset.width / 2 - 1e-9 &&
-              object.x + object.width > center.x - preset.width / 2 + 1e-9,
+    for (const column of columns) {
+      column.sort((a, b) => a.y - b.y);
+      for (let index = 0; index < column.length - 1; index += 1) {
+        const top = column[index];
+        const bottom = column[index + 1];
+        const rawGap = bottom.y - (top.y + top.height);
+        const gap = Math.abs(rawGap) < 1e-9 ? 0 : rawGap;
+        if (gap < -1e-9) continue;
+        for (const side of ['top', 'bottom'] as const) {
+          const center = {
+            x:
+              alignment === 'start'
+                ? columnAnchor(top) + preset.width / 2
+                : alignment === 'end'
+                  ? columnAnchor(top) - preset.width / 2
+                  : columnAnchor(top),
+            y:
+              side === 'bottom'
+                ? bottom.y + bottom.height + gap + preset.height / 2
+                : top.y - gap - preset.height / 2,
+          };
+          const target = worldToScreen(center, viewport);
+          const distance = Math.hypot(pointer.x - target.x, pointer.y - target.y);
+          if (distance > OBJECT_SNAP_RADIUS_PX || (spacing && distance >= spacing.distance))
+            continue;
+          const candidateTop = center.y - preset.height / 2;
+          const candidateBottom = center.y + preset.height / 2;
+          if (
+            objects.some(
+              (object) =>
+                object.y < candidateBottom - 1e-9 &&
+                object.y + object.height > candidateTop + 1e-9 &&
+                object.x < center.x + preset.width / 2 - 1e-9 &&
+                object.x + object.width > center.x - preset.width / 2 + 1e-9,
+            )
           )
-        )
-          continue;
-        const guideX = Math.min(top.x, bottom.x, center.x - preset.width / 2) - 16 / viewport.scale;
-        const first: [Point, Point] = [
-          { x: guideX, y: top.y + top.height },
-          { x: guideX, y: bottom.y },
-        ];
-        const second: [Point, Point] =
-          side === 'bottom'
-            ? [
-                { x: guideX, y: bottom.y + bottom.height },
-                { x: guideX, y: candidateTop },
-              ]
-            : [
-                { x: guideX, y: candidateBottom },
-                { x: guideX, y: top.y },
-              ];
-        spacing = {
-          center,
-          left: top,
-          right: bottom,
-          gap,
-          side: side === 'bottom' ? 'right' : 'left',
-          distance,
-        };
-        verticalGapGuide = { first, second, meters: gap };
+            continue;
+          const guideX =
+            Math.min(top.x, bottom.x, center.x - preset.width / 2) - 16 / viewport.scale;
+          const first: [Point, Point] = [
+            { x: guideX, y: top.y + top.height },
+            { x: guideX, y: bottom.y },
+          ];
+          const second: [Point, Point] =
+            side === 'bottom'
+              ? [
+                  { x: guideX, y: bottom.y + bottom.height },
+                  { x: guideX, y: candidateTop },
+                ]
+              : [
+                  { x: guideX, y: candidateBottom },
+                  { x: guideX, y: top.y },
+                ];
+          spacing = {
+            center,
+            left: top,
+            right: bottom,
+            gap,
+            side: side === 'bottom' ? 'right' : 'left',
+            distance,
+          };
+          verticalGapGuide = { first, second, meters: gap };
+        }
       }
     }
   }
@@ -229,7 +262,7 @@ export function snapObjectPlacement(
       return {
         center: spacing.center,
         horizontalReference: null,
-        verticalReference: centerOf(spacing.right),
+        verticalReference: { x: spacing.center.x, y: centerOf(spacing.right).y },
         gapGuide: verticalGapGuide,
         grid: false,
         roomBoundary: false,
@@ -254,7 +287,7 @@ export function snapObjectPlacement(
           ];
     return {
       center: spacing.center,
-      horizontalReference: centerOf(spacing.right),
+      horizontalReference: { x: centerOf(spacing.right).x, y: spacing.center.y },
       verticalReference: null,
       gapGuide: { first, second, meters: spacing.gap },
       grid: false,
@@ -273,14 +306,51 @@ export function snapObjectPlacement(
     };
   }
 
+  let rowStart: {
+    left: number;
+    top: number;
+    bottom: number;
+    centerX: number;
+    distance: number;
+  } | null = null;
+  const snappedY = horizontal?.reference.y ?? grid?.world.y ?? world.y;
+  const topOfPlacement = snappedY - preset.height / 2;
+  const alignedRows: LayoutObject[][] = [];
+  for (const object of [...objects].sort((a, b) => a.y - b.y)) {
+    const row = alignedRows.at(-1);
+    if (row && Math.abs(row[0].y - object.y) * viewport.scale <= 2) row.push(object);
+    else alignedRows.push([object]);
+  }
+  for (const row of alignedRows) {
+    if (row.length < 2) continue;
+    const left = Math.min(...row.map((object) => object.x));
+    const top = Math.min(...row.map((object) => object.y));
+    const bottom = Math.max(...row.map((object) => object.y + object.height));
+    if (topOfPlacement < bottom - 1e-9) continue;
+    const centerX = left + preset.width / 2;
+    const horizontalDistance = Math.abs(world.x - centerX) * viewport.scale;
+    if (horizontalDistance > OBJECT_SNAP_RADIUS_PX) continue;
+    const distance = topOfPlacement - bottom;
+    if (!rowStart || distance < rowStart.distance)
+      rowStart = { left, top, bottom, centerX, distance };
+  }
+
+  const center = {
+    x: rowStart?.centerX ?? vertical?.reference.x ?? grid?.world.x ?? world.x,
+    y: snappedY,
+  };
+
   return {
-    center: {
-      x: vertical?.reference.x ?? grid?.world.x ?? world.x,
-      y: horizontal?.reference.y ?? grid?.world.y ?? world.y,
-    },
+    center,
     horizontalReference: horizontal?.reference ?? null,
-    verticalReference: vertical?.reference ?? null,
+    verticalReference: rowStart ? null : (vertical?.reference ?? null),
     gapGuide: null,
+    startLineGuide: rowStart
+      ? [
+          { x: rowStart.left, y: rowStart.top },
+          { x: rowStart.left, y: center.y + preset.height / 2 },
+        ]
+      : undefined,
     grid: grid !== null,
     roomBoundary: false,
   };

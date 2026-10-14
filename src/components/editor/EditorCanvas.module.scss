@@ -248,6 +248,10 @@
       stroke-width: 1.5;
       stroke-dasharray: 6 4;
     }
+    .objectStartLineGuide {
+      stroke: #526fe1;
+      stroke-width: 2;
+    }
   }
   .objectGapGuide {
     line {
@@ -260,6 +264,34 @@
       stroke: #fff;
       stroke-width: 3px;
       paint-order: stroke;
+      font-size: 11px;
+      font-weight: 700;
+    }
+  }
+  .distanceGuide {
+    polygon {
+      fill: none;
+      stroke: #a23db9;
+      stroke-width: 2;
+      stroke-dasharray: 5 4;
+    }
+    line {
+      stroke: #a23db9;
+      stroke-width: 2;
+      stroke-dasharray: 4 3;
+    }
+    circle {
+      fill: #fff;
+      stroke: #a23db9;
+      stroke-width: 2;
+    }
+    rect {
+      fill: #fff;
+      stroke: #d7a8e2;
+      stroke-width: 1;
+    }
+    text {
+      fill: #80249b;
       font-size: 11px;
       font-weight: 700;
     }
