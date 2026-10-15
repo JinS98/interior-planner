@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   areaFromSquareMeters,
   areaToSquareMeters,
@@ -14,6 +14,11 @@ import { rotateRoomVertices } from '../features/room/rotation';
 import { TOOL_SHORTCUTS } from '../features/editor/shortcuts';
 import { redoEditorCommand, undoEditorCommand } from '../features/history/actions';
 import { FloorBoard } from '../features/floor/FloorBoard';
+import {
+  AutoPlacementPanel,
+  type AutoPlacementPreview,
+  type SelectedAutoPlacementSource,
+} from '../features/autoPlacement/AutoPlacementPanel';
 import { floorConnectionLabel } from '../features/floor/connection';
 import {
   copySelectedObjects,
@@ -37,6 +42,42 @@ import { useEditorStore, type EditorTool } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
 import type { LayoutObject, ObjectAppearance } from '../types/layout';
 import styles from './App.module.scss';
+
+function InspectorSection({
+  id,
+  title,
+  children,
+  initiallyOpen = false,
+  className = '',
+}: {
+  id: string;
+  title: string;
+  children: ReactNode;
+  initiallyOpen?: boolean;
+  className?: string;
+}) {
+  const [expanded, setExpanded] = useState(initiallyOpen);
+
+  return (
+    <section className={`${styles.inspectorSection} ${className}`} aria-label={title}>
+      <button
+        type="button"
+        className={styles.inspectorSectionToggle}
+        aria-expanded={expanded}
+        aria-controls={`${id}-content`}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span>{title}</span>
+        <span className={styles.inspectorSectionChevron} aria-hidden="true">
+          {expanded ? '▾' : '▸'}
+        </span>
+      </button>
+      <div id={`${id}-content`} className={styles.inspectorSectionContent} hidden={!expanded}>
+        {children}
+      </div>
+    </section>
+  );
+}
 
 function normalizePaletteSearch(value: string): string {
   return value
@@ -511,6 +552,9 @@ export function App() {
   const [newItemFloorConnector, setNewItemFloorConnector] = useState(false);
   const [objectArray, setObjectArray] = useState<ObjectArrayOptions>(DEFAULT_OBJECT_ARRAY);
   const [placementMode, setPlacementMode] = useState<'single' | 'array'>('single');
+  const [autoPlacementPreview, setAutoPlacementPreview] = useState<AutoPlacementPreview | null>(
+    null,
+  );
   const [newItemCategory, setNewItemCategory] = useState<LayoutObject['category']>('furniture');
   const [newItemAppearance, setNewItemAppearance] =
     useState<ObjectAppearance>(NEW_PALETTE_APPEARANCE);
@@ -573,6 +617,11 @@ export function App() {
     : null;
   const selectedPaletteItem = paletteItemsById[selectedPaletteItemId ?? ''];
   const selectedObjectSet = setTemplatesById[selectedObjectSetId ?? ''];
+  const autoPlacementSource: SelectedAutoPlacementSource = selectedObjectSet
+    ? { kind: 'set', template: selectedObjectSet }
+    : selectedPaletteItem
+      ? { kind: 'item', item: selectedPaletteItem, appearance: objectPlacement }
+      : null;
   const maxSetInstances = Math.min(
     100,
     Math.floor(MAX_SET_PLACED_OBJECTS / (selectedObjectSet?.members.length ?? 1)),
@@ -580,13 +629,15 @@ export function App() {
   const selectedObjects = selectedObjectIds
     .map((id) => objectsById[id])
     .filter((object) => object && object.floorId === activeFloorId);
-  const selectedGroupId = !editingGroupId && selectedObjects.length > 0
-    ? selectedObjects[0].groupId
-    : null;
-  const selectedGroup = selectedGroupId && selectedObjects.every((object) => object.groupId === selectedGroupId) &&
-    (floor?.objectIds ?? []).filter((id) => objectsById[id]?.groupId === selectedGroupId).length === selectedObjects.length
-    ? selectedGroupId
-    : null;
+  const selectedGroupId =
+    !editingGroupId && selectedObjects.length > 0 ? selectedObjects[0].groupId : null;
+  const selectedGroup =
+    selectedGroupId &&
+    selectedObjects.every((object) => object.groupId === selectedGroupId) &&
+    (floor?.objectIds ?? []).filter((id) => objectsById[id]?.groupId === selectedGroupId).length ===
+      selectedObjects.length
+      ? selectedGroupId
+      : null;
   const groupName = selectedGroup
     ? (setTemplatesById[selectedObjects[0].groupTemplateId ?? '']?.name ?? '물품 세트')
     : null;
@@ -612,6 +663,17 @@ export function App() {
       roomEditPreview?.roomId === room.id ? { ...room, vertices: roomEditPreview.vertices } : room,
     );
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId);
+  useEffect(() => {
+    setAutoPlacementPreview(null);
+  }, [
+    tool,
+    activeFloorId,
+    historyPast,
+    roomEditPreview,
+    selectedPaletteItemId,
+    selectedObjectSetId,
+    objectPlacement,
+  ]);
   const selectedWalls = selectedRoom ? getWallSegments(selectedRoom.vertices, true) : [];
   const floorAreaSqm = rooms.reduce((sum, room) => sum + polygonArea(room.vertices), 0);
   const projectAreaSqm = (project?.floorIds ?? []).reduce(
@@ -758,7 +820,11 @@ export function App() {
               </button>
             </div>
           </div>
-          <FloorBoard areaUnit={areaUnit} objectArray={activeObjectArray} />
+          <FloorBoard
+            areaUnit={areaUnit}
+            objectArray={activeObjectArray}
+            autoPlacementPreview={autoPlacementPreview}
+          />
         </section>
         <aside className={styles.inspector} aria-label="속성 패널">
           <p className={styles.caption}>속성</p>
@@ -774,7 +840,7 @@ export function App() {
                     : '도면 보기'}
           </h2>
           {tool !== 'object' && (
-            <>
+            <InspectorSection id="drawing-info" title="도면 정보" initiallyOpen={tool === 'pan'}>
               <div className={styles.infoRow}>
                 <span>현재 층</span>
                 <strong>{floor?.name ?? '없음'}</strong>
@@ -787,25 +853,33 @@ export function App() {
                 <span>오브젝트</span>
                 <strong>{floor?.objectIds.length ?? 0}개</strong>
               </div>
-            </>
+            </InspectorSection>
           )}
           {tool === 'room' && (
-            <p className={styles.contextHint}>
-              도면을 클릭해 꼭짓점을 만들고, 시작점을 다시 클릭해 공간을 완성하세요.
-            </p>
+            <InspectorSection id="room-help" title="사용 방법" initiallyOpen>
+              <p className={styles.contextHint}>
+                도면을 클릭해 꼭짓점을 만들고, 시작점을 다시 클릭해 공간을 완성하세요.
+              </p>
+            </InspectorSection>
           )}
           {tool === 'divide' && (
-            <p className={styles.contextHint}>
-              기존 공간의 경계에서 시작해 분할선을 그리세요. Esc로 직전 점을 취소할 수 있습니다.
-            </p>
+            <InspectorSection id="divide-help" title="사용 방법" initiallyOpen>
+              <p className={styles.contextHint}>
+                기존 공간의 경계에서 시작해 분할선을 그리세요. Esc로 직전 점을 취소할 수 있습니다.
+              </p>
+            </InspectorSection>
           )}
           {tool === 'pan' && (
-            <p className={styles.contextHint}>드래그로 도면을 이동하고 휠로 확대·축소하세요.</p>
+            <InspectorSection id="pan-help" title="사용 방법" initiallyOpen>
+              <p className={styles.contextHint}>드래그로 도면을 이동하고 휠로 확대·축소하세요.</p>
+            </InspectorSection>
           )}
           {tool === 'select' && !selectedRoom && selectedObjectIds.length === 0 && (
-            <p className={styles.contextHint}>
-              공간이나 물품을 클릭하면 여기에서 속성을 편집할 수 있습니다.
-            </p>
+            <InspectorSection id="select-help" title="사용 방법" initiallyOpen>
+              <p className={styles.contextHint}>
+                공간이나 물품을 클릭하면 여기에서 속성을 편집할 수 있습니다.
+              </p>
+            </InspectorSection>
           )}
           {tool === 'object' && (
             <section
@@ -822,60 +896,254 @@ export function App() {
                 clearPaletteItem();
               }}
             >
-              <h3>물품 선택</h3>
-              <p>물품을 고른 뒤 목록 아래에서 배치 방식을 선택하세요.</p>
-              {!addingPaletteItem && (
-                <button
-                  type="button"
-                  className={styles.paletteAddButton}
-                  onClick={() => {
-                    setNewItemName(paletteQuery.trim());
-                    setAddingPaletteItem(true);
-                  }}
-                >
-                  + 새 물품 등록
-                </button>
-              )}
-              {!addingPaletteItem && (
-                <>
-                  <input
-                    className={styles.paletteSearch}
-                    type="search"
-                    aria-label="물품 검색"
-                    placeholder="물품 검색 · 예: 계단, 엘리베이터"
-                    value={paletteQuery}
-                    onChange={(event) => setPaletteQuery(event.target.value)}
-                  />
-                  <div className={styles.presetList}>
-                    {visiblePaletteItems.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className={styles.presetButton}
-                        aria-pressed={tool === 'object' && selectedPaletteItemId === item.id}
-                        onClick={() => setPaletteItem(item)}
-                      >
-                        <span
-                          className={styles.presetIcon}
-                          style={{ color: item.color, backgroundColor: `${item.color}26` }}
-                          aria-hidden="true"
+              <InspectorSection id="palette-selection" title="물품 선택" initiallyOpen>
+                <p>물품을 고른 뒤 목록 아래에서 배치 방식을 선택하세요.</p>
+                {!addingPaletteItem && (
+                  <button
+                    type="button"
+                    className={styles.paletteAddButton}
+                    onClick={() => {
+                      setNewItemName(paletteQuery.trim());
+                      setAddingPaletteItem(true);
+                    }}
+                  >
+                    + 새 물품 등록
+                  </button>
+                )}
+                {!addingPaletteItem && (
+                  <>
+                    <input
+                      className={styles.paletteSearch}
+                      type="search"
+                      aria-label="물품 검색"
+                      placeholder="물품 검색 · 예: 계단, 엘리베이터"
+                      value={paletteQuery}
+                      onChange={(event) => setPaletteQuery(event.target.value)}
+                    />
+                    <div className={styles.presetList}>
+                      {visiblePaletteItems.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={styles.presetButton}
+                          aria-pressed={tool === 'object' && selectedPaletteItemId === item.id}
+                          onClick={() => setPaletteItem(item)}
                         >
-                          {item.shape === 'rectangle' ? '▭' : item.shape === 'circle' ? '●' : '▲'}
-                        </span>
-                        <span className={styles.presetDetails}>
-                          <span className={styles.presetName}>{item.name}</span>
-                          {item.floorConnector && (
-                            <span className={styles.connectorBadge}>층 연결</span>
-                          )}
-                        </span>
-                        <span className={styles.presetSize}>
-                          {item.width} × {item.height}m
-                        </span>
+                          <span
+                            className={styles.presetIcon}
+                            style={{ color: item.color, backgroundColor: `${item.color}26` }}
+                            aria-hidden="true"
+                          >
+                            {item.shape === 'rectangle' ? '▭' : item.shape === 'circle' ? '●' : '▲'}
+                          </span>
+                          <span className={styles.presetDetails}>
+                            <span className={styles.presetName}>{item.name}</span>
+                            {item.floorConnector && (
+                              <span className={styles.connectorBadge}>층 연결</span>
+                            )}
+                          </span>
+                          <span className={styles.presetSize}>
+                            {item.width} × {item.height}m
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                    {paletteQuery &&
+                      visiblePaletteItems.length === 0 &&
+                      visibleObjectSetPresets.length === 0 && (
+                        <p>검색 결과가 없습니다. 새 물품으로 추가할 수 있습니다.</p>
+                      )}
+                  </>
+                )}
+                {addingPaletteItem && (
+                  <form
+                    className={styles.paletteCreateForm}
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (!project) return;
+                      const item = addPaletteItem(project.id, {
+                        name: newItemName,
+                        category: newItemCategory,
+                        floorConnector: newItemFloorConnector,
+                        ...newItemAppearance,
+                      });
+                      if (!item) return;
+                      setPaletteItem(item);
+                      setAddingPaletteItem(false);
+                      setNewItemName('');
+                      setNewItemCategory('furniture');
+                      setNewItemFloorConnector(false);
+                      setNewItemAppearance(NEW_PALETTE_APPEARANCE);
+                      setPaletteQuery('');
+                    }}
+                  >
+                    <h4>물품 추가</h4>
+                    <label className={styles.paletteCreateField}>
+                      이름
+                      <input
+                        required
+                        maxLength={40}
+                        value={newItemName}
+                        onChange={(event) => setNewItemName(event.target.value)}
+                        placeholder="예: 소파, 모니터"
+                      />
+                    </label>
+                    <label className={styles.paletteCreateField}>
+                      종류
+                      <select
+                        value={newItemCategory}
+                        onChange={(event) =>
+                          setNewItemCategory(event.target.value as LayoutObject['category'])
+                        }
+                      >
+                        <option value="furniture">가구</option>
+                        <option value="electronics">전자기기</option>
+                        <option value="facility">기타 물품</option>
+                        <option value="commercial">상업용 물품</option>
+                      </select>
+                    </label>
+                    <label className={styles.connectorOption}>
+                      <input
+                        type="checkbox"
+                        checked={newItemFloorConnector}
+                        onChange={(event) => setNewItemFloorConnector(event.target.checked)}
+                      />
+                      층 연결 물품
+                    </label>
+                    <p className={styles.connectorHelp}>
+                      계단·엘리베이터처럼 모든 층의 같은 위치에 표시하고 함께 편집합니다.
+                    </p>
+                    <ObjectAppearanceControls
+                      appearance={newItemAppearance}
+                      idPrefix="new-palette-item"
+                      onChange={(patch) =>
+                        setNewItemAppearance((current) => ({ ...current, ...patch }))
+                      }
+                    />
+                    <div className={styles.paletteCreateActions}>
+                      <button type="button" onClick={() => setAddingPaletteItem(false)}>
+                        취소
                       </button>
-                    ))}
+                      <button type="submit" disabled={!newItemName.trim()}>
+                        추가하기
+                      </button>
+                    </div>
+                  </form>
+                )}
+                {!addingPaletteItem &&
+                  selectedPaletteItemId === null &&
+                  selectedObjectSetId === null && (
+                    <p className={styles.paletteEmptySelection} role="status">
+                      선택된 물품이 없습니다. 물품이나 세트를 고르거나 추가해 주세요.
+                    </p>
+                  )}
+                {!addingPaletteItem && selectedPaletteItemId !== null && (
+                  <div className={styles.paletteSettings}>
+                    <h4>{selectedPaletteItem?.name} 배치 설정</h4>
+                    {selectedPaletteItem && (
+                      <>
+                        <label className={styles.connectorOption}>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(selectedPaletteItem.floorConnector)}
+                            onChange={(event) =>
+                              setPaletteItemFloorConnector(
+                                selectedPaletteItem.id,
+                                event.target.checked,
+                              )
+                            }
+                          />
+                          층 연결 물품
+                        </label>
+                        <p className={styles.connectorSettingHelp}>
+                          켜면 새로 배치하는 물품이 모든 층의 같은 위치에 나타납니다.
+                        </p>
+                      </>
+                    )}
+                    <div className={styles.arraySettings}>
+                      <span className={styles.objectFieldLabel}>배치 방식</span>
+                      <div
+                        className={styles.placementMode}
+                        role="group"
+                        aria-label="물품 배치 방식"
+                      >
+                        <button
+                          type="button"
+                          aria-pressed={placementMode === 'single'}
+                          onClick={() => selectPlacementMode('single')}
+                        >
+                          한 개씩
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={placementMode === 'array'}
+                          onClick={() => selectPlacementMode('array')}
+                        >
+                          여러 개 배열
+                        </button>
+                      </div>
+                      {placementMode === 'array' && (
+                        <>
+                          <div className={styles.arrayFields}>
+                            <ObjectArrayInput
+                              label="가로 개수"
+                              value={objectArray.columns}
+                              min={1}
+                              max={Math.floor(100 / objectArray.rows)}
+                              step={1}
+                              onCommit={(columns) => updateObjectArray({ columns })}
+                            />
+                            <ObjectArrayInput
+                              label="세로 개수"
+                              value={objectArray.rows}
+                              min={1}
+                              max={Math.floor(100 / objectArray.columns)}
+                              step={1}
+                              onCommit={(rows) => updateObjectArray({ rows })}
+                            />
+                            <ObjectArrayInput
+                              label="가로 간격 (m)"
+                              value={objectArray.gapX}
+                              min={0}
+                              max={20}
+                              step={0.1}
+                              onCommit={(gapX) => updateObjectArray({ gapX })}
+                            />
+                            <ObjectArrayInput
+                              label="세로 간격 (m)"
+                              value={objectArray.gapY}
+                              min={0}
+                              max={20}
+                              step={0.1}
+                              onCommit={(gapY) => updateObjectArray({ gapY })}
+                            />
+                          </div>
+                          <p>
+                            {objectArray.columns * objectArray.rows}개를 클릭 한 번으로 배치합니다.
+                          </p>
+                        </>
+                      )}
+                      {placementMode === 'single' && (
+                        <p>도면 클릭 한 번에 물품 1개를 배치합니다.</p>
+                      )}
+                      <p>
+                        기존 물품과 가까워지면 정렬·같은 간격·아랫줄 시작선에 자동으로 맞춰집니다.
+                      </p>
+                    </div>
+                    <details className={styles.placementDetails}>
+                      <summary>크기·모양·색상 조정</summary>
+                      <ObjectAppearanceControls
+                        appearance={objectPlacement}
+                        idPrefix="placement"
+                        onChange={setObjectPlacement}
+                      />
+                    </details>
                   </div>
+                )}
+              </InspectorSection>
+              {!addingPaletteItem && (
+                <InspectorSection id="my-sets" title="내 세트" initiallyOpen>
                   <div className={styles.objectSetPresets}>
-                    <h4>내 세트</h4>
                     <button
                       type="button"
                       className={styles.paletteAddButton}
@@ -904,511 +1172,415 @@ export function App() {
                       <p>물품을 직접 배치해 자주 쓰는 세트를 만들어 보세요.</p>
                     )}
                   </div>
-                  {paletteQuery &&
-                    visiblePaletteItems.length === 0 &&
-                    visibleObjectSetPresets.length === 0 && (
-                      <p>검색 결과가 없습니다. 새 물품으로 추가할 수 있습니다.</p>
-                    )}
-                </>
-              )}
-              {addingPaletteItem && (
-                <form
-                  className={styles.paletteCreateForm}
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (!project) return;
-                    const item = addPaletteItem(project.id, {
-                      name: newItemName,
-                      category: newItemCategory,
-                      floorConnector: newItemFloorConnector,
-                      ...newItemAppearance,
-                    });
-                    if (!item) return;
-                    setPaletteItem(item);
-                    setAddingPaletteItem(false);
-                    setNewItemName('');
-                    setNewItemCategory('furniture');
-                    setNewItemFloorConnector(false);
-                    setNewItemAppearance(NEW_PALETTE_APPEARANCE);
-                    setPaletteQuery('');
-                  }}
-                >
-                  <h4>물품 추가</h4>
-                  <label className={styles.paletteCreateField}>
-                    이름
-                    <input
-                      required
-                      maxLength={40}
-                      value={newItemName}
-                      onChange={(event) => setNewItemName(event.target.value)}
-                      placeholder="예: 소파, 모니터"
-                    />
-                  </label>
-                  <label className={styles.paletteCreateField}>
-                    종류
-                    <select
-                      value={newItemCategory}
-                      onChange={(event) =>
-                        setNewItemCategory(event.target.value as LayoutObject['category'])
-                      }
-                    >
-                      <option value="furniture">가구</option>
-                      <option value="electronics">전자기기</option>
-                      <option value="facility">기타 물품</option>
-                      <option value="commercial">상업용 물품</option>
-                    </select>
-                  </label>
-                  <label className={styles.connectorOption}>
-                    <input
-                      type="checkbox"
-                      checked={newItemFloorConnector}
-                      onChange={(event) => setNewItemFloorConnector(event.target.checked)}
-                    />
-                    층 연결 물품
-                  </label>
-                  <p className={styles.connectorHelp}>
-                    계단·엘리베이터처럼 모든 층의 같은 위치에 표시하고 함께 편집합니다.
-                  </p>
-                  <ObjectAppearanceControls
-                    appearance={newItemAppearance}
-                    idPrefix="new-palette-item"
-                    onChange={(patch) =>
-                      setNewItemAppearance((current) => ({ ...current, ...patch }))
-                    }
-                  />
-                  <div className={styles.paletteCreateActions}>
-                    <button type="button" onClick={() => setAddingPaletteItem(false)}>
-                      취소
-                    </button>
-                    <button type="submit" disabled={!newItemName.trim()}>
-                      추가하기
-                    </button>
-                  </div>
-                </form>
-              )}
-              {!addingPaletteItem &&
-                selectedPaletteItemId === null &&
-                selectedObjectSetId === null && (
-                  <p className={styles.paletteEmptySelection} role="status">
-                    선택된 물품이 없습니다. 물품이나 세트를 고르거나 추가해 주세요.
-                  </p>
-                )}
-              {!addingPaletteItem && selectedObjectSetId && (
-                <div className={styles.paletteSettings}>
-                  <h4>{selectedObjectSet?.name} 배치 설정</h4>
-                  <p>세트를 도면에 놓은 뒤 구성 물품을 각각 편집할 수 있습니다.</p>
-                  <div className={styles.arraySettings}>
-                    <span className={styles.objectFieldLabel}>배치 방식</span>
-                    <div className={styles.placementMode} role="group" aria-label="세트 배치 방식">
-                      <button
-                        type="button"
-                        aria-pressed={placementMode === 'single'}
-                        onClick={() => selectPlacementMode('single')}
-                      >
-                        한 개씩
-                      </button>
-                      <button
-                        type="button"
-                        aria-pressed={placementMode === 'array'}
-                        onClick={() => selectPlacementMode('array')}
-                      >
-                        여러 개 배열
-                      </button>
-                    </div>
-                    {placementMode === 'array' && (
-                      <>
-                        <div className={styles.arrayFields}>
-                          <ObjectArrayInput
-                            label="가로 개수"
-                            value={objectArray.columns}
-                            min={1}
-                            max={Math.floor(maxSetInstances / objectArray.rows)}
-                            step={1}
-                            onCommit={(columns) => updateObjectArray({ columns })}
-                          />
-                          <ObjectArrayInput
-                            label="세로 개수"
-                            value={objectArray.rows}
-                            min={1}
-                            max={Math.floor(maxSetInstances / objectArray.columns)}
-                            step={1}
-                            onCommit={(rows) => updateObjectArray({ rows })}
-                          />
-                          <ObjectArrayInput
-                            label="가로 간격 (m)"
-                            value={objectArray.gapX}
-                            min={0}
-                            max={20}
-                            step={0.1}
-                            onCommit={(gapX) => updateObjectArray({ gapX })}
-                          />
-                          <ObjectArrayInput
-                            label="세로 간격 (m)"
-                            value={objectArray.gapY}
-                            min={0}
-                            max={20}
-                            step={0.1}
-                            onCommit={(gapY) => updateObjectArray({ gapY })}
-                          />
+                  {selectedObjectSetId && (
+                    <div className={styles.paletteSettings}>
+                      <h4>{selectedObjectSet?.name} 배치 설정</h4>
+                      <p>세트를 도면에 놓은 뒤 구성 물품을 각각 편집할 수 있습니다.</p>
+                      <div className={styles.arraySettings}>
+                        <span className={styles.objectFieldLabel}>배치 방식</span>
+                        <div
+                          className={styles.placementMode}
+                          role="group"
+                          aria-label="세트 배치 방식"
+                        >
+                          <button
+                            type="button"
+                            aria-pressed={placementMode === 'single'}
+                            onClick={() => selectPlacementMode('single')}
+                          >
+                            한 개씩
+                          </button>
+                          <button
+                            type="button"
+                            aria-pressed={placementMode === 'array'}
+                            onClick={() => selectPlacementMode('array')}
+                          >
+                            여러 개 배열
+                          </button>
                         </div>
+                        {placementMode === 'array' && (
+                          <>
+                            <div className={styles.arrayFields}>
+                              <ObjectArrayInput
+                                label="가로 개수"
+                                value={objectArray.columns}
+                                min={1}
+                                max={Math.floor(maxSetInstances / objectArray.rows)}
+                                step={1}
+                                onCommit={(columns) => updateObjectArray({ columns })}
+                              />
+                              <ObjectArrayInput
+                                label="세로 개수"
+                                value={objectArray.rows}
+                                min={1}
+                                max={Math.floor(maxSetInstances / objectArray.columns)}
+                                step={1}
+                                onCommit={(rows) => updateObjectArray({ rows })}
+                              />
+                              <ObjectArrayInput
+                                label="가로 간격 (m)"
+                                value={objectArray.gapX}
+                                min={0}
+                                max={20}
+                                step={0.1}
+                                onCommit={(gapX) => updateObjectArray({ gapX })}
+                              />
+                              <ObjectArrayInput
+                                label="세로 간격 (m)"
+                                value={objectArray.gapY}
+                                min={0}
+                                max={20}
+                                step={0.1}
+                                onCommit={(gapY) => updateObjectArray({ gapY })}
+                              />
+                            </div>
+                            <p>
+                              {objectArray.columns * objectArray.rows}개 세트를 클릭 한 번으로
+                              배치합니다.
+                            </p>
+                          </>
+                        )}
+                        {placementMode === 'single' && (
+                          <p>도면 클릭 한 번에 세트 1개를 배치합니다.</p>
+                        )}
                         <p>
-                          {objectArray.columns * objectArray.rows}개 세트를 클릭 한 번으로
-                          배치합니다.
+                          기존 물품과 가까워지면 정렬·같은 간격·아랫줄 시작선에 자동으로 맞춰집니다.
                         </p>
-                      </>
-                    )}
-                    {placementMode === 'single' && <p>도면 클릭 한 번에 세트 1개를 배치합니다.</p>}
-                    <p>
-                      기존 물품과 가까워지면 정렬·같은 간격·아랫줄 시작선에 자동으로 맞춰집니다.
-                    </p>
-                  </div>
-                </div>
-              )}
-              {!addingPaletteItem && selectedPaletteItemId !== null && (
-                <div className={styles.paletteSettings}>
-                  <h4>{selectedPaletteItem?.name} 배치 설정</h4>
-                  {selectedPaletteItem && (
-                    <>
-                      <label className={styles.connectorOption}>
-                        <input
-                          type="checkbox"
-                          checked={Boolean(selectedPaletteItem.floorConnector)}
-                          onChange={(event) =>
-                            setPaletteItemFloorConnector(
-                              selectedPaletteItem.id,
-                              event.target.checked,
-                            )
-                          }
-                        />
-                        층 연결 물품
-                      </label>
-                      <p className={styles.connectorSettingHelp}>
-                        켜면 새로 배치하는 물품이 모든 층의 같은 위치에 나타납니다.
-                      </p>
-                    </>
+                      </div>
+                    </div>
                   )}
-                  <div className={styles.arraySettings}>
-                    <span className={styles.objectFieldLabel}>배치 방식</span>
-                    <div className={styles.placementMode} role="group" aria-label="물품 배치 방식">
-                      <button
-                        type="button"
-                        aria-pressed={placementMode === 'single'}
-                        onClick={() => selectPlacementMode('single')}
-                      >
-                        한 개씩
-                      </button>
-                      <button
-                        type="button"
-                        aria-pressed={placementMode === 'array'}
-                        onClick={() => selectPlacementMode('array')}
-                      >
-                        여러 개 배열
-                      </button>
-                    </div>
-                    {placementMode === 'array' && (
-                      <>
-                        <div className={styles.arrayFields}>
-                          <ObjectArrayInput
-                            label="가로 개수"
-                            value={objectArray.columns}
-                            min={1}
-                            max={Math.floor(100 / objectArray.rows)}
-                            step={1}
-                            onCommit={(columns) => updateObjectArray({ columns })}
-                          />
-                          <ObjectArrayInput
-                            label="세로 개수"
-                            value={objectArray.rows}
-                            min={1}
-                            max={Math.floor(100 / objectArray.columns)}
-                            step={1}
-                            onCommit={(rows) => updateObjectArray({ rows })}
-                          />
-                          <ObjectArrayInput
-                            label="가로 간격 (m)"
-                            value={objectArray.gapX}
-                            min={0}
-                            max={20}
-                            step={0.1}
-                            onCommit={(gapX) => updateObjectArray({ gapX })}
-                          />
-                          <ObjectArrayInput
-                            label="세로 간격 (m)"
-                            value={objectArray.gapY}
-                            min={0}
-                            max={20}
-                            step={0.1}
-                            onCommit={(gapY) => updateObjectArray({ gapY })}
-                          />
-                        </div>
-                        <p>
-                          {objectArray.columns * objectArray.rows}개를 클릭 한 번으로 배치합니다.
-                        </p>
-                      </>
-                    )}
-                    {placementMode === 'single' && <p>도면 클릭 한 번에 물품 1개를 배치합니다.</p>}
-                    <p>
-                      기존 물품과 가까워지면 정렬·같은 간격·아랫줄 시작선에 자동으로 맞춰집니다.
-                    </p>
-                  </div>
-                  <details className={styles.placementDetails}>
-                    <summary>크기·모양·색상 조정</summary>
-                    <ObjectAppearanceControls
-                      appearance={objectPlacement}
-                      idPrefix="placement"
-                      onChange={setObjectPlacement}
-                    />
-                  </details>
-                </div>
+                </InspectorSection>
+              )}
+              {!addingPaletteItem && project && (
+                <InspectorSection
+                  id="auto-placement"
+                  title="자동 배치"
+                  initiallyOpen={Boolean(autoPlacementPreview)}
+                >
+                  <AutoPlacementPanel
+                    key={`${activeFloorId}:${selectedObjectSetId ?? selectedPaletteItemId ?? 'none'}`}
+                    rooms={rooms}
+                    preferredRoomId={selectedRoomId}
+                    source={autoPlacementSource}
+                    objects={(floor?.objectIds ?? [])
+                      .map((id) => objectsById[id])
+                      .filter((object) => object != null)}
+                    preview={autoPlacementPreview}
+                    onPreview={setAutoPlacementPreview}
+                    onCancel={() => setAutoPlacementPreview(null)}
+                  />
+                </InspectorSection>
               )}
             </section>
           )}
           {tool === 'select' && (selectedObjects.length > 0 || clipboardCount > 0) && (
-            <section className={styles.objectEditSection} aria-label="물품 편집 명령">
-              <h3>물품 작업</h3>
-              <div className={styles.objectActions}>
-                <button
-                  type="button"
-                  disabled={selectedObjects.length === 0}
-                  onClick={copySelectedObjects}
-                >
-                  복사
-                </button>
-                <button type="button" disabled={clipboardCount === 0} onClick={pasteCopiedObjects}>
-                  붙여넣기
-                </button>
-                <button
-                  type="button"
-                  disabled={unlockedCount === 0}
-                  onClick={() => setLayoutObjectsLocked(selectedObjectIds, true)}
-                >
-                  잠금
-                </button>
-                <button
-                  type="button"
-                  disabled={lockedCount === 0}
-                  onClick={() => setLayoutObjectsLocked(selectedObjectIds, false)}
-                >
-                  잠금 해제
-                </button>
-                <button
-                  type="button"
-                  className={styles.objectDangerButton}
-                  disabled={unlockedCount === 0}
-                  onClick={deleteSelectedObjects}
-                >
-                  선택 삭제
-                </button>
+            <InspectorSection id="object-actions" title="물품 작업" initiallyOpen>
+              <div className={styles.objectEditSection}>
+                <div className={styles.objectActions}>
+                  <button
+                    type="button"
+                    disabled={selectedObjects.length === 0}
+                    onClick={copySelectedObjects}
+                  >
+                    복사
+                  </button>
+                  <button
+                    type="button"
+                    disabled={clipboardCount === 0}
+                    onClick={pasteCopiedObjects}
+                  >
+                    붙여넣기
+                  </button>
+                  <button
+                    type="button"
+                    disabled={unlockedCount === 0}
+                    onClick={() => setLayoutObjectsLocked(selectedObjectIds, true)}
+                  >
+                    잠금
+                  </button>
+                  <button
+                    type="button"
+                    disabled={lockedCount === 0}
+                    onClick={() => setLayoutObjectsLocked(selectedObjectIds, false)}
+                  >
+                    잠금 해제
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.objectDangerButton}
+                    disabled={unlockedCount === 0}
+                    onClick={deleteSelectedObjects}
+                  >
+                    선택 삭제
+                  </button>
+                </div>
+                {lockedCount > 0 && (
+                  <p>잠긴 물품 {lockedCount}개는 이동·수정·삭제에서 제외됩니다.</p>
+                )}
               </div>
-              {lockedCount > 0 && <p>잠긴 물품 {lockedCount}개는 이동·수정·삭제에서 제외됩니다.</p>}
-            </section>
+            </InspectorSection>
           )}
           {tool === 'select' && selectedGroup && (
-            <section className={styles.objectEditSection} aria-label={`${groupName} 그룹 편집`}>
-              <h3>{groupName} · {selectedObjects.length}개 물품</h3>
-              <p>그룹을 드래그해 이동하고 위쪽 손잡이로 회전하세요. 복제한 세트는 독립적으로 편집됩니다.</p>
-              <div className={styles.objectActions}>
-                <button type="button" disabled={lockedCount > 0} onClick={() => rotateLayoutObjectGroup(selectedGroup, -90)}>↶ 90°</button>
-                <button type="button" disabled={lockedCount > 0} onClick={() => rotateLayoutObjectGroup(selectedGroup, 90)}>↷ 90°</button>
-                <button type="button" onClick={() => {
-                  if (!activeFloorId) return;
-                  const ids = duplicateLayoutObjects(activeFloorId, selectedObjects, { x: 0.25, y: 0.25 });
-                  if (ids.length > 0) selectObjects(ids);
-                }}>그룹 복제</button>
-                <button type="button" onClick={() => startGroupInternalEdit(selectedGroup)}>내부 편집</button>
+            <InspectorSection
+              key={selectedGroup}
+              id="group-edit"
+              title={`${groupName} · ${selectedObjects.length}개 물품`}
+              initiallyOpen
+            >
+              <div className={styles.objectEditSection}>
+                <p>
+                  그룹을 드래그해 이동하고 위쪽 손잡이로 회전하세요. 복제한 세트는 독립적으로
+                  편집됩니다.
+                </p>
+                <div className={styles.objectActions}>
+                  <button
+                    type="button"
+                    disabled={lockedCount > 0}
+                    onClick={() => rotateLayoutObjectGroup(selectedGroup, -90)}
+                  >
+                    ↶ 90°
+                  </button>
+                  <button
+                    type="button"
+                    disabled={lockedCount > 0}
+                    onClick={() => rotateLayoutObjectGroup(selectedGroup, 90)}
+                  >
+                    ↷ 90°
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!activeFloorId) return;
+                      const ids = duplicateLayoutObjects(activeFloorId, selectedObjects, {
+                        x: 0.25,
+                        y: 0.25,
+                      });
+                      if (ids.length > 0) selectObjects(ids);
+                    }}
+                  >
+                    그룹 복제
+                  </button>
+                  <button type="button" onClick={() => startGroupInternalEdit(selectedGroup)}>
+                    내부 편집
+                  </button>
+                </div>
               </div>
-            </section>
+            </InspectorSection>
           )}
           {tool === 'select' && editingGroupId && (
-            <section className={styles.objectEditSection} aria-label="세트 내부 편집">
-              <h3>세트 내부 편집</h3>
-              <p>구성 물품을 클릭해 개별 이동·회전·크기·색상을 수정하세요. 변경은 현재 배치된 세트에 적용됩니다.</p>
-              <div className={styles.objectActions}>
-                <button type="button" onClick={finishGroupInternalEdit}>그룹 편집으로 돌아가기</button>
+            <InspectorSection id="group-internal-edit" title="세트 내부 편집" initiallyOpen>
+              <div className={styles.objectEditSection}>
+                <p>
+                  구성 물품을 클릭해 개별 이동·회전·크기·색상을 수정하세요. 변경은 현재 배치된
+                  세트에 적용됩니다.
+                </p>
+                <div className={styles.objectActions}>
+                  <button type="button" onClick={finishGroupInternalEdit}>
+                    그룹 편집으로 돌아가기
+                  </button>
+                </div>
               </div>
-            </section>
+            </InspectorSection>
           )}
           {tool === 'select' && selectedObjectIds.length > 1 && !selectedGroup && (
-            <section className={styles.objectEditSection} aria-label="다중 선택된 물품">
-              <h3>{selectedObjectIds.length}개 물품 선택</h3>
-              <p>
-                잠기지 않은 물품 하나를 드래그하면 함께 이동합니다. Shift+클릭으로 선택을 바꿀 수
-                있습니다.
-              </p>
-            </section>
+            <InspectorSection
+              id="multi-object-info"
+              title={`${selectedObjectIds.length}개 물품 선택`}
+              initiallyOpen
+            >
+              <div className={styles.objectEditSection}>
+                <p>
+                  잠기지 않은 물품 하나를 드래그하면 함께 이동합니다. Shift+클릭으로 선택을 바꿀 수
+                  있습니다.
+                </p>
+              </div>
+            </InspectorSection>
           )}
           {tool === 'select' && selectedObject && !selectedGroup && (
-            <section
-              className={styles.objectEditSection}
-              aria-label={`${selectedObject.name} 편집`}
+            <InspectorSection
+              key={selectedObject.id}
+              id="object-edit"
+              title={`${selectedObject.name} 편집${selectedObject.locked ? ' · 잠금' : ''}`}
+              initiallyOpen
             >
-              <h3>
-                {selectedObject.name} 편집{selectedObject.locked ? ' · 잠금' : ''}
-              </h3>
-              <p>
-                {selectedObject.locked
-                  ? '편집하려면 위의 잠금 해제를 누르세요.'
-                  : '물품을 드래그해 이동하고, 위쪽 손잡이로 회전하거나 오른쪽 아래 손잡이로 크기를 바꾸세요.'}
-              </p>
-              {selectedObject.floorConnectionId && (
-                <p className={styles.connectionDetails}>
-                  층 연결 · {floorConnectionLabel(selectedObject, floorsById)} · 위치와 모양을
-                  바꾸면 모든 층에 반영됩니다.
+              <div className={styles.objectEditSection}>
+                <p>
+                  {selectedObject.locked
+                    ? '편집하려면 위의 잠금 해제를 누르세요.'
+                    : '물품을 드래그해 이동하고, 위쪽 손잡이로 회전하거나 오른쪽 아래 손잡이로 크기를 바꾸세요.'}
                 </p>
-              )}
-              <fieldset className={styles.objectLockedFields} disabled={selectedObject.locked}>
-                <div className={styles.objectPositionControls}>
-                  <span className={styles.objectFieldLabel}>
-                    위치 (도면 원점 기준, 회전 전 왼쪽 위)
-                  </span>
-                  <div className={styles.objectSizeRow} key={`${selectedObject.id}-position`}>
-                    <ObjectCoordinateInput
-                      id="selected-object-x"
-                      label="X 좌표"
-                      value={selectedObject.x}
-                      onCommit={(x) => updateLayoutObject(selectedObject.id, { x })}
-                    />
-                    <ObjectCoordinateInput
-                      id="selected-object-y"
-                      label="Y 좌표"
-                      value={selectedObject.y}
-                      onCommit={(y) => updateLayoutObject(selectedObject.id, { y })}
-                    />
+                {selectedObject.floorConnectionId && (
+                  <p className={styles.connectionDetails}>
+                    층 연결 · {floorConnectionLabel(selectedObject, floorsById)} · 위치와 모양을
+                    바꾸면 모든 층에 반영됩니다.
+                  </p>
+                )}
+                <fieldset className={styles.objectLockedFields} disabled={selectedObject.locked}>
+                  <div className={styles.objectPositionControls}>
+                    <span className={styles.objectFieldLabel}>
+                      위치 (도면 원점 기준, 회전 전 왼쪽 위)
+                    </span>
+                    <div className={styles.objectSizeRow} key={`${selectedObject.id}-position`}>
+                      <ObjectCoordinateInput
+                        id="selected-object-x"
+                        label="X 좌표"
+                        value={selectedObject.x}
+                        onCommit={(x) => updateLayoutObject(selectedObject.id, { x })}
+                      />
+                      <ObjectCoordinateInput
+                        id="selected-object-y"
+                        label="Y 좌표"
+                        value={selectedObject.y}
+                        onCommit={(y) => updateLayoutObject(selectedObject.id, { y })}
+                      />
+                    </div>
                   </div>
-                </div>
-                <ObjectAppearanceControls
-                  key={selectedObject.id}
-                  appearance={selectedObject}
-                  idPrefix="selected-object"
-                  deferColorCommit
-                  onChange={(patch) => updateLayoutObject(selectedObject.id, patch)}
-                />
-                <ObjectRotationInput
-                  key={`${selectedObject.id}-rotation`}
-                  rotation={selectedObject.rotation}
-                  onCommit={(rotation) => updateLayoutObject(selectedObject.id, { rotation })}
-                />
-              </fieldset>
-            </section>
+                  <ObjectAppearanceControls
+                    key={selectedObject.id}
+                    appearance={selectedObject}
+                    idPrefix="selected-object"
+                    deferColorCommit
+                    onChange={(patch) => updateLayoutObject(selectedObject.id, patch)}
+                  />
+                  <ObjectRotationInput
+                    key={`${selectedObject.id}-rotation`}
+                    rotation={selectedObject.rotation}
+                    onCommit={(rotation) => updateLayoutObject(selectedObject.id, { rotation })}
+                  />
+                </fieldset>
+              </div>
+            </InspectorSection>
           )}
           {tool === 'select' && selectedRoom && (
-            <section className={styles.roomEditSection} aria-label={`${selectedRoom.name} 편집`}>
-              <h3>{selectedRoom.name} 편집</h3>
-              <p>
-                방 내부를 드래그해 옮기거나, 위쪽 회전 손잡이로 돌리세요. 직각 근처에서는 90° 단위로
-                맞춰집니다.
-              </p>
-              <div className={styles.roomRotateActions}>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setGeometryError(
-                      updateRoomVertices(
-                        selectedRoom.id,
-                        rotateRoomVertices(selectedRoom.vertices, -90),
-                      ),
-                    )
-                  }
-                >
-                  ↶ 90°
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setGeometryError(
-                      updateRoomVertices(
-                        selectedRoom.id,
-                        rotateRoomVertices(selectedRoom.vertices, 90),
-                      ),
-                    )
-                  }
-                >
-                  ↷ 90°
-                </button>
-              </div>
-              <div className={styles.wallButtons}>
-                {selectedWalls.map((wall, index) => (
-                  <button
-                    key={index}
-                    type="button"
-                    aria-pressed={selectedWallIndex === index}
-                    onClick={() => selectWall(selectedRoom.id, index)}
-                  >
-                    벽 {index + 1} · {Number(wall.lengthMeters.toFixed(2))}m
-                  </button>
-                ))}
-              </div>
-              {selectedWallIndex !== null && selectedWalls[selectedWallIndex] && (
-                <WallLengthInput
-                  key={`${selectedRoom.id}:${selectedWallIndex}`}
-                  wallIndex={selectedWallIndex}
-                  lengthMeters={selectedWalls[selectedWallIndex].lengthMeters}
-                  onCommit={(lengthMeters) => {
-                    const next = resizeWall(selectedRoom.vertices, selectedWallIndex, lengthMeters);
-                    setGeometryError(
-                      next ? updateRoomVertices(selectedRoom.id, next) : 'invalid-wall-length',
-                    );
-                  }}
-                />
-              )}
-              {geometryError && (
-                <p className={styles.geometryError} role="alert">
-                  {roomEditErrorMessage(geometryError)}
+            <InspectorSection
+              key={selectedRoom.id}
+              id="room-edit"
+              title={`${selectedRoom.name} 편집`}
+              initiallyOpen
+            >
+              <div className={styles.roomEditSection}>
+                <p>
+                  방 내부를 드래그해 옮기거나, 위쪽 회전 손잡이로 돌리세요. 직각 근처에서는 90°
+                  단위로 맞춰집니다.
                 </p>
-              )}
-            </section>
+                <div className={styles.roomRotateActions}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setGeometryError(
+                        updateRoomVertices(
+                          selectedRoom.id,
+                          rotateRoomVertices(selectedRoom.vertices, -90),
+                        ),
+                      )
+                    }
+                  >
+                    ↶ 90°
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setGeometryError(
+                        updateRoomVertices(
+                          selectedRoom.id,
+                          rotateRoomVertices(selectedRoom.vertices, 90),
+                        ),
+                      )
+                    }
+                  >
+                    ↷ 90°
+                  </button>
+                </div>
+                <div className={styles.wallButtons}>
+                  {selectedWalls.map((wall, index) => (
+                    <button
+                      key={index}
+                      type="button"
+                      aria-pressed={selectedWallIndex === index}
+                      onClick={() => selectWall(selectedRoom.id, index)}
+                    >
+                      벽 {index + 1} · {Number(wall.lengthMeters.toFixed(2))}m
+                    </button>
+                  ))}
+                </div>
+                {selectedWallIndex !== null && selectedWalls[selectedWallIndex] && (
+                  <WallLengthInput
+                    key={`${selectedRoom.id}:${selectedWallIndex}`}
+                    wallIndex={selectedWallIndex}
+                    lengthMeters={selectedWalls[selectedWallIndex].lengthMeters}
+                    onCommit={(lengthMeters) => {
+                      const next = resizeWall(
+                        selectedRoom.vertices,
+                        selectedWallIndex,
+                        lengthMeters,
+                      );
+                      setGeometryError(
+                        next ? updateRoomVertices(selectedRoom.id, next) : 'invalid-wall-length',
+                      );
+                    }}
+                  />
+                )}
+                {geometryError && (
+                  <p className={styles.geometryError} role="alert">
+                    {roomEditErrorMessage(geometryError)}
+                  </p>
+                )}
+              </div>
+            </InspectorSection>
           )}
           {tool !== 'object' && (
-            <section className={styles.areaSection} aria-label="공간 면적">
-              <div className={styles.areaTotal}>
-                <span>현재 층 면적</span>
-                <strong>{formatArea(floorAreaSqm, areaUnit)}</strong>
+            <InspectorSection id="area-summary" title="공간 면적" initiallyOpen={tool === 'select'}>
+              <div className={styles.areaSection}>
+                <div className={styles.areaTotal}>
+                  <span>현재 층 면적</span>
+                  <strong>{formatArea(floorAreaSqm, areaUnit)}</strong>
+                </div>
+                <div className={styles.areaDifference}>
+                  <span>전체 층 면적</span>
+                  <strong>{formatArea(projectAreaSqm, areaUnit)}</strong>
+                </div>
+                {project && (
+                  <>
+                    <TargetAreaInput
+                      key={`${project.id}:${areaUnit}`}
+                      areaUnit={areaUnit}
+                      targetAreaSqm={project.targetAreaSqm}
+                      onChange={(value) => setTargetAreaSqm(project.id, value)}
+                    />
+                    {project.targetAreaSqm !== null && (
+                      <div className={styles.areaDifference}>
+                        <span>목표 대비</span>
+                        <strong>
+                          {formatAreaDifference(projectAreaSqm, project.targetAreaSqm, areaUnit)}
+                        </strong>
+                      </div>
+                    )}
+                  </>
+                )}
+                {rooms.length === 0 ? (
+                  <p className={styles.areaEmpty}>완성된 공간이 없습니다.</p>
+                ) : (
+                  <ul className={styles.roomAreaList}>
+                    {rooms.map((room) => (
+                      <li key={room.id}>
+                        <button
+                          type="button"
+                          className={styles.roomAreaButton}
+                          aria-pressed={room.id === selectedRoomId}
+                          onClick={() => {
+                            setTool('select');
+                            selectRoom(room.id);
+                          }}
+                        >
+                          <span>{room.name}</span>
+                          <strong>{formatArea(polygonArea(room.vertices), areaUnit)}</strong>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
-              <div className={styles.areaDifference}>
-                <span>전체 층 면적</span>
-                <strong>{formatArea(projectAreaSqm, areaUnit)}</strong>
-              </div>
-              {project && (
-                <>
-                  <TargetAreaInput
-                    key={`${project.id}:${areaUnit}`}
-                    areaUnit={areaUnit}
-                    targetAreaSqm={project.targetAreaSqm}
-                    onChange={(value) => setTargetAreaSqm(project.id, value)}
-                  />
-                  {project.targetAreaSqm !== null && (
-                    <div className={styles.areaDifference}>
-                      <span>목표 대비</span>
-                      <strong>
-                        {formatAreaDifference(projectAreaSqm, project.targetAreaSqm, areaUnit)}
-                      </strong>
-                    </div>
-                  )}
-                </>
-              )}
-              {rooms.length === 0 ? (
-                <p className={styles.areaEmpty}>완성된 공간이 없습니다.</p>
-              ) : (
-                <ul className={styles.roomAreaList}>
-                  {rooms.map((room) => (
-                    <li key={room.id}>
-                      <button
-                        type="button"
-                        className={styles.roomAreaButton}
-                        aria-pressed={room.id === selectedRoomId}
-                        onClick={() => {
-                          setTool('select');
-                          selectRoom(room.id);
-                        }}
-                      >
-                        <span>{room.name}</span>
-                        <strong>{formatArea(polygonArea(room.vertices), areaUnit)}</strong>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+            </InspectorSection>
           )}
         </aside>
       </main>

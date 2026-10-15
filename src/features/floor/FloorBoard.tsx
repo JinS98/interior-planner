@@ -7,14 +7,17 @@ import { FloorPreview } from './FloorPreview';
 import { FloorManager } from './FloorManager';
 import { centeredFloorViewport, floorContentBounds } from './viewport';
 import type { ObjectArrayOptions } from '../object/array';
+import type { AutoPlacementPreview } from '../autoPlacement/AutoPlacementPanel';
 import styles from './FloorBoard.module.scss';
 
 export function FloorBoard({
   areaUnit,
   objectArray,
+  autoPlacementPreview,
 }: {
   areaUnit: AreaUnit;
   objectArray: ObjectArrayOptions;
+  autoPlacementPreview: AutoPlacementPreview | null;
 }) {
   const activeProjectId = useEditorStore((state) => state.activeProjectId);
   const activeFloorId = useEditorStore((state) => state.activeFloorId);
@@ -224,6 +227,7 @@ export function FloorBoard({
                     areaUnit={areaUnit}
                     objectArray={objectArray}
                     overlayFloorId={visibleOverlayFloorId}
+                    autoPlacementPreview={autoPlacementPreview}
                   />
                 </div>
               ) : (

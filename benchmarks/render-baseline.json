@@ -1,0 +1,114 @@
+{
+  "browser": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "rounds": 3,
+  "results": {
+    "100": {
+      "samples": [
+        {
+          "initialCommitMs": 19.099999986588955,
+          "panCommitMs": 7.5999999940395355,
+          "panFrameMs": 31.299999997019768,
+          "pointerCommitMs": 7.200000002980232,
+          "pointerFrameMs": 32.5,
+          "heapMiB": 8.146171569824219
+        },
+        {
+          "initialCommitMs": 17.799999997019768,
+          "panCommitMs": 6.300000004470348,
+          "panFrameMs": 32.600000001490116,
+          "pointerCommitMs": 5.799999997019768,
+          "pointerFrameMs": 32.19999999552965,
+          "heapMiB": 9.619300842285156
+        },
+        {
+          "initialCommitMs": 14.600000001490116,
+          "panCommitMs": 5.5,
+          "panFrameMs": 32.099999994039536,
+          "pointerCommitMs": 4.899999998509884,
+          "pointerFrameMs": 32.79999999701977,
+          "heapMiB": 15.46542739868164
+        }
+      ],
+      "median": {
+        "initialCommitMs": 17.799999997019768,
+        "panCommitMs": 6.300000004470348,
+        "panFrameMs": 32.099999994039536,
+        "pointerCommitMs": 5.799999997019768,
+        "pointerFrameMs": 32.5,
+        "heapMiB": 9.619300842285156
+      }
+    },
+    "500": {
+      "samples": [
+        {
+          "initialCommitMs": 39,
+          "panCommitMs": 5,
+          "panFrameMs": 19,
+          "pointerCommitMs": 4.600000001490116,
+          "pointerFrameMs": 32.899999998509884,
+          "heapMiB": 28.023509979248047
+        },
+        {
+          "initialCommitMs": 61.8999999910593,
+          "panCommitMs": 7.299999989569187,
+          "panFrameMs": 24,
+          "pointerCommitMs": 7.5,
+          "pointerFrameMs": 42.600000001490116,
+          "heapMiB": 36.339393615722656
+        },
+        {
+          "initialCommitMs": 69.6000000089407,
+          "panCommitMs": 7.700000002980232,
+          "panFrameMs": 25.100000001490116,
+          "pointerCommitMs": 6.399999998509884,
+          "pointerFrameMs": 39.399999998509884,
+          "heapMiB": 35.539058685302734
+        }
+      ],
+      "median": {
+        "initialCommitMs": 61.8999999910593,
+        "panCommitMs": 7.299999989569187,
+        "panFrameMs": 24,
+        "pointerCommitMs": 6.399999998509884,
+        "pointerFrameMs": 39.399999998509884,
+        "heapMiB": 35.539058685302734
+      }
+    },
+    "1000": {
+      "samples": [
+        {
+          "initialCommitMs": 83.10000001639128,
+          "panCommitMs": 9.799999997019768,
+          "panFrameMs": 33,
+          "pointerCommitMs": 15.199999995529652,
+          "pointerFrameMs": 67.5,
+          "heapMiB": 39.9901237487793
+        },
+        {
+          "initialCommitMs": 95.00000000745058,
+          "panCommitMs": 10.400000005960464,
+          "panFrameMs": 33.600000001490116,
+          "pointerCommitMs": 13.699999995529652,
+          "pointerFrameMs": 66.60000000149012,
+          "heapMiB": 50.774044036865234
+        },
+        {
+          "initialCommitMs": 96.30000001192093,
+          "panCommitMs": 13.49999999254942,
+          "panFrameMs": 42,
+          "pointerCommitMs": 41.5,
+          "pointerFrameMs": 106.89999999850988,
+          "heapMiB": 83.96365737915039
+        }
+      ],
+      "median": {
+        "initialCommitMs": 95.00000000745058,
+        "panCommitMs": 10.400000005960464,
+        "panFrameMs": 33.600000001490116,
+        "pointerCommitMs": 15.199999995529652,
+        "pointerFrameMs": 67.5,
+        "heapMiB": 50.774044036865234
+      }
+    }
+  }
+}

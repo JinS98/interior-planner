@@ -1,8 +1,10 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
+  memo,
   type PointerEvent,
   type WheelEvent,
 } from 'react';
@@ -69,8 +71,9 @@ import {
 } from '../../features/editor/measurement';
 import { useEditorStore } from '../../store/editorStore';
 import { useProjectStore } from '../../store/projectStore';
-import type { LayoutObject, Point, Room, Viewport } from '../../types/layout';
+import type { Floor, LayoutObject, Point, Room, Viewport } from '../../types/layout';
 import { LayoutObjectShape } from './LayoutObjectShape';
+import type { AutoPlacementPreview } from '../../features/autoPlacement/AutoPlacementPanel';
 import styles from './EditorCanvas.module.scss';
 
 const MIN_SCALE = 20;
@@ -156,14 +159,35 @@ function DistanceGuide({
   );
 }
 
+const LayoutObjectLayer = memo(function LayoutObjectLayer({
+  objects,
+  viewport,
+  floorsById,
+}: {
+  objects: LayoutObject[];
+  viewport: Viewport;
+  floorsById: Record<string, Floor>;
+}) {
+  return objects.map((object) => (
+    <LayoutObjectShape
+      key={object.id}
+      object={object}
+      viewport={viewport}
+      connectionLabel={floorConnectionLabel(object, floorsById)}
+    />
+  ));
+});
+
 export function EditorCanvas({
   areaUnit,
   overlayFloorId,
   objectArray,
+  autoPlacementPreview,
 }: {
   areaUnit: AreaUnit;
   overlayFloorId?: string | null;
   objectArray: ObjectArrayOptions;
+  autoPlacementPreview: AutoPlacementPreview | null;
 }) {
   const viewport = useEditorStore((state) => state.viewport);
   const setViewport = useEditorStore((state) => state.setViewport);
@@ -294,39 +318,53 @@ export function EditorCanvas({
   const [hoveredRoomRotateHandle, setHoveredRoomRotateHandle] = useState(false);
   const [roomError, setRoomError] = useState<string | null>(null);
   const rooms = (floor?.roomIds ?? []).map((id) => roomsById[id]).filter((room) => room != null);
-  const objects = (floor?.objectIds ?? [])
-    .map((id) => objectsById[id])
-    .filter((object) => object != null);
+  const objects = useMemo(
+    () => (floor?.objectIds ?? []).map((id) => objectsById[id]).filter((object) => object != null),
+    [floor?.objectIds, objectsById],
+  );
   const overlayRooms = (overlayFloor?.roomIds ?? [])
     .map((id) => roomsById[id])
     .filter((room) => room != null);
-  const overlayObjects = (overlayFloor?.objectIds ?? [])
-    .map((id) => objectsById[id])
-    .filter(
-      (object) =>
-        object != null &&
-        (!object.floorConnectionId ||
-          !objects.some(
-            (activeObject) => activeObject.floorConnectionId === object.floorConnectionId,
-          )),
-    );
-  const displayedObjects = objects.map(
-    (object) =>
-      objectMovePreviewById?.[object.id] ??
-      (objectEditPreview?.id === object.id ? objectEditPreview : object),
+  const activeConnectionIds = useMemo(
+    () => new Set(objects.map((object) => object.floorConnectionId).filter((id) => id != null)),
+    [objects],
   );
-  const selectedGroupId = !editingGroupId && selectedObjectIds.length > 0
-    ? objectsById[selectedObjectIds[0]]?.groupId
-    : null;
-  const groupObjects = selectedGroupId &&
+  const overlayObjects = useMemo(
+    () =>
+      (overlayFloor?.objectIds ?? [])
+        .map((id) => objectsById[id])
+        .filter(
+          (object) =>
+            object != null &&
+            (!object.floorConnectionId || !activeConnectionIds.has(object.floorConnectionId)),
+        ),
+    [overlayFloor?.objectIds, objectsById, activeConnectionIds],
+  );
+  const displayedObjects = useMemo(
+    () =>
+      objects.map(
+        (object) =>
+          objectMovePreviewById?.[object.id] ??
+          (objectEditPreview?.id === object.id ? objectEditPreview : object),
+      ),
+    [objects, objectMovePreviewById, objectEditPreview],
+  );
+  const objectViewport = useMemo(() => ({ x: 0, y: 0, scale: viewport.scale }), [viewport.scale]);
+  const selectedGroupId =
+    !editingGroupId && selectedObjectIds.length > 0
+      ? objectsById[selectedObjectIds[0]]?.groupId
+      : null;
+  const groupObjects =
+    selectedGroupId &&
     groupMemberIds(objects, selectedGroupId).length === selectedObjectIds.length &&
     selectedObjectIds.every((id) => objectsById[id]?.groupId === selectedGroupId)
-    ? displayedObjects.filter((object) => object.groupId === selectedGroupId)
-    : [];
+      ? displayedObjects.filter((object) => object.groupId === selectedGroupId)
+      : [];
   const selectedGroupBounds = groupObjects.length > 0 ? groupBounds(groupObjects) : null;
-  const selectedObject = groupObjects.length > 0
-    ? undefined
-    : displayedObjects.find((object) => object.id === selectedObjectId);
+  const selectedObject =
+    groupObjects.length > 0
+      ? undefined
+      : displayedObjects.find((object) => object.id === selectedObjectId);
   const selectedObjectOrigin = selectedObject
     ? worldToScreen({ x: selectedObject.x, y: selectedObject.y }, viewport)
     : null;
@@ -453,6 +491,7 @@ export function EditorCanvas({
     : objectArrayFootprint(objectPlacement, objectArray);
   const placementSnap =
     tool === 'object' &&
+    !autoPlacementPreview &&
     (selectedPaletteItem || selectedObjectSet) &&
     !spacePressed &&
     !dragging &&
@@ -557,7 +596,7 @@ export function EditorCanvas({
     } else if (
       tool === 'room' ||
       tool === 'divide' ||
-      (tool === 'object' && (selectedPaletteItem || selectedObjectSet))
+      (tool === 'object' && !autoPlacementPreview && (selectedPaletteItem || selectedObjectSet))
     ) {
       event.currentTarget.setPointerCapture(event.pointerId);
       roomClick.current = { pointerId: event.pointerId, point: localPoint(event) };
@@ -568,7 +607,9 @@ export function EditorCanvas({
         selectedGroupBounds &&
         groupObjects.every((object) => !object.locked) &&
         Math.hypot(
-          point.x - ((selectedGroupBounds.left + selectedGroupBounds.right) / 2 * viewport.scale + viewport.x),
+          point.x -
+            (((selectedGroupBounds.left + selectedGroupBounds.right) / 2) * viewport.scale +
+              viewport.x),
           point.y - (selectedGroupBounds.top * viewport.scale + viewport.y - 24),
         ) <= (event.pointerType === 'touch' ? 18 : 11)
       ) {
@@ -728,9 +769,14 @@ export function EditorCanvas({
         point,
         currentGroupRotate.viewport,
       );
-      setObjectMovePreview(Object.fromEntries(
-        rotateGroupObjects(currentGroupRotate.originals, degrees).map((object) => [object.id, object]),
-      ));
+      setObjectMovePreview(
+        Object.fromEntries(
+          rotateGroupObjects(currentGroupRotate.originals, degrees).map((object) => [
+            object.id,
+            object,
+          ]),
+        ),
+      );
     } else if (currentObjectResize?.pointerId === event.pointerId) {
       setObjectEditPreview(
         resizeObjectFromScreenDrag(
@@ -830,10 +876,13 @@ export function EditorCanvas({
       setHoverPoint(event.pointerType === 'touch' ? null : point);
       if (event.pointerType !== 'touch') setAltPressed(event.altKey);
       const nearGroupRotateHandle =
-        tool === 'select' && selectedGroupBounds !== null &&
+        tool === 'select' &&
+        selectedGroupBounds !== null &&
         groupObjects.every((object) => !object.locked) &&
         Math.hypot(
-          point.x - ((selectedGroupBounds.left + selectedGroupBounds.right) / 2 * viewport.scale + viewport.x),
+          point.x -
+            (((selectedGroupBounds.left + selectedGroupBounds.right) / 2) * viewport.scale +
+              viewport.x),
           point.y - (selectedGroupBounds.top * viewport.scale + viewport.y - 24),
         ) <= 11;
       const nearHandle =
@@ -872,7 +921,12 @@ export function EditorCanvas({
       setObjectMovePreview(null);
       rotateLayoutObjectGroup(
         edit.groupId,
-        groupRotationFromScreenDrag(edit.originals, edit.startPoint, localPoint(event), edit.viewport),
+        groupRotationFromScreenDrag(
+          edit.originals,
+          edit.startPoint,
+          localPoint(event),
+          edit.viewport,
+        ),
       );
       return;
     }
@@ -1015,6 +1069,7 @@ export function EditorCanvas({
     )
       return;
     if (tool === 'object') {
+      if (autoPlacementPreview) return;
       if (!selectedObjectSet && (!selectedPaletteItemId || !selectedPaletteItem)) return;
       const center = snapObjectPlacement(
         point,
@@ -1358,26 +1413,30 @@ export function EditorCanvas({
                     .join(' ')}
                 />
               ))}
-              <g className={styles.overlayObjects}>
-                {overlayObjects.map((object) => (
-                  <LayoutObjectShape
-                    key={object.id}
-                    object={object}
-                    viewport={viewport}
-                    connectionLabel={floorConnectionLabel(object, floorsById)}
-                  />
-                ))}
+              <g
+                className={styles.overlayObjects}
+                transform={`translate(${viewport.x} ${viewport.y})`}
+              >
+                <LayoutObjectLayer
+                  objects={overlayObjects}
+                  viewport={objectViewport}
+                  floorsById={floorsById}
+                />
               </g>
             </g>
           )}
-          {displayedObjects.map((object) => (
-            <LayoutObjectShape
-              key={object.id}
-              object={object}
-              viewport={viewport}
-              connectionLabel={floorConnectionLabel(object, floorsById)}
+          <g transform={`translate(${viewport.x} ${viewport.y})`}>
+            <LayoutObjectLayer
+              objects={displayedObjects}
+              viewport={objectViewport}
+              floorsById={floorsById}
             />
-          ))}
+          </g>
+          {tool === 'object' &&
+            autoPlacementPreview?.floorId === activeFloorId &&
+            autoPlacementPreview.objects.map((object) => (
+              <LayoutObjectShape key={object.id} object={object} viewport={viewport} preview />
+            ))}
           {tool === 'select' &&
             selectedObjectIds.length > 1 &&
             displayedObjects
@@ -1416,14 +1475,26 @@ export function EditorCanvas({
                 <>
                   <line
                     className={styles.objectRotationStem}
-                    x1={(selectedGroupBounds.left + selectedGroupBounds.right) / 2 * viewport.scale + viewport.x}
+                    x1={
+                      ((selectedGroupBounds.left + selectedGroupBounds.right) / 2) *
+                        viewport.scale +
+                      viewport.x
+                    }
                     y1={selectedGroupBounds.top * viewport.scale + viewport.y}
-                    x2={(selectedGroupBounds.left + selectedGroupBounds.right) / 2 * viewport.scale + viewport.x}
+                    x2={
+                      ((selectedGroupBounds.left + selectedGroupBounds.right) / 2) *
+                        viewport.scale +
+                      viewport.x
+                    }
                     y2={selectedGroupBounds.top * viewport.scale + viewport.y - 24}
                   />
                   <circle
                     className={styles.objectRotationHandle}
-                    cx={(selectedGroupBounds.left + selectedGroupBounds.right) / 2 * viewport.scale + viewport.x}
+                    cx={
+                      ((selectedGroupBounds.left + selectedGroupBounds.right) / 2) *
+                        viewport.scale +
+                      viewport.x
+                    }
                     cy={selectedGroupBounds.top * viewport.scale + viewport.y - 24}
                     r={6}
                   />

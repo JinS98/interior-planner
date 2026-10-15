@@ -1,8 +1,9 @@
+import { memo } from 'react';
 import { worldToScreen } from '../../domain/geometry/coordinates';
 import type { LayoutObject, Viewport } from '../../types/layout';
 import styles from './EditorCanvas.module.scss';
 
-export function LayoutObjectShape({
+export const LayoutObjectShape = memo(function LayoutObjectShape({
   object,
   viewport,
   preview = false,
@@ -69,4 +70,4 @@ export function LayoutObjectShape({
       )}
     </>
   );
-}
+});

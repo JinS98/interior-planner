@@ -16,6 +16,15 @@ import {
 import { normalizeObjectRotation } from '../features/object/edit';
 import { rotateGroupObjects } from '../features/object/group';
 import {
+  createAutoPlacementPlan,
+  objectsFromAutoPlacements,
+  sameAutoPlacements,
+  type AutoPlacementOptions,
+  type AutoPlacementSource,
+  templateFromPaletteItem,
+} from '../features/autoPlacement/plan';
+import type { GridPlacementCandidate } from '../features/autoPlacement/gridCandidates';
+import {
   connectedObjects,
   floorConnectionLinks,
   refreshFloorConnectionLinks,
@@ -116,6 +125,13 @@ export interface ProjectState {
     setId: string,
     centers: Point[],
     options: ObjectArrayOptions,
+  ) => boolean;
+  applyAutoPlacements: (
+    floorId: string,
+    roomId: string,
+    source: AutoPlacementSource,
+    options: AutoPlacementOptions,
+    previewPlacements: GridPlacementCandidate[],
   ) => boolean;
   updateLayoutObject: (
     objectId: string,
@@ -565,6 +581,61 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         };
       });
       return created;
+    },
+    applyAutoPlacements: (floorId, roomId, source, options, previewPlacements) => {
+      if (previewPlacements.length === 0) return false;
+      let applied = false;
+      commit('물품 세트 자동 배치', (state) => {
+        const floor = state.floorsById[floorId];
+        const room = state.roomsById[roomId];
+        const project = floor && state.projectsById[floor.projectId];
+        const item = source.kind === 'item' ? state.paletteItemsById[source.id] : null;
+        const template = source.kind === 'set'
+          ? state.setTemplatesById[source.id]
+          : item && isValidObjectAppearance(source.appearance)
+            ? templateFromPaletteItem(item, source.appearance)
+            : null;
+        if (
+          !floor || !room || room.floorId !== floorId || !floor.roomIds.includes(roomId) ||
+          !template || !project || template.projectId !== project.id
+        ) return state;
+        const existing = floor.objectIds.map((id) => state.objectsById[id]).filter((object) => object != null);
+        const fresh = createAutoPlacementPlan(room, template, existing, options);
+        if (fresh.error || !sameAutoPlacements(fresh.placements, previewPlacements)) return state;
+        const placed = objectsFromAutoPlacements(
+          template, floorId, fresh.placements, () => crypto.randomUUID(), source.kind === 'set',
+        );
+        const objects = item?.floorConnector
+          ? placed.flatMap((object) => {
+              const connectionId = crypto.randomUUID();
+              return project.floorIds.map((targetFloorId) => ({
+                ...object,
+                id: crypto.randomUUID(),
+                floorId: targetFloorId,
+                floorConnectionId: connectionId,
+                ...floorConnectionLinks(project, targetFloorId),
+              }));
+            })
+          : placed;
+        const floorsById = { ...state.floorsById };
+        for (const object of objects) {
+          const target = floorsById[object.floorId];
+          floorsById[object.floorId] = { ...target, objectIds: [...target.objectIds, object.id] };
+        }
+        applied = true;
+        return {
+          projectsById: {
+            ...state.projectsById,
+            [project.id]: { ...project, updatedAt: new Date().toISOString() },
+          },
+          floorsById,
+          objectsById: {
+            ...state.objectsById,
+            ...Object.fromEntries(objects.map((object) => [object.id, object])),
+          },
+        };
+      });
+      return applied;
     },
     updateLayoutObject: (objectId, patch) => {
       let updated = false;

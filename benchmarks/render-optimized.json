@@ -1,0 +1,114 @@
+{
+  "browser": "Chrome/155.0.8059.40",
+  "rounds": 3,
+  "results": {
+    "100": {
+      "samples": [
+        {
+          "initialCommitMs": 22.19999999552965,
+          "panCommitMs": 1.2000000029802322,
+          "panFrameMs": 32,
+          "pointerCommitMs": 0.9000000059604645,
+          "pointerFrameMs": 32.099999994039536,
+          "heapMiB": 5.504829406738281
+        },
+        {
+          "initialCommitMs": 17.100000001490116,
+          "panCommitMs": 0.8999999985098839,
+          "panFrameMs": 32.69999999552965,
+          "pointerCommitMs": 1.0999999940395355,
+          "pointerFrameMs": 31.700000002980232,
+          "heapMiB": 7.05743408203125
+        },
+        {
+          "initialCommitMs": 15.699999995529652,
+          "panCommitMs": 0.7999999970197678,
+          "panFrameMs": 32.70000000298023,
+          "pointerCommitMs": 0.7999999970197678,
+          "pointerFrameMs": 32.19999999552965,
+          "heapMiB": 8.379291534423828
+        }
+      ],
+      "median": {
+        "initialCommitMs": 17.100000001490116,
+        "panCommitMs": 0.8999999985098839,
+        "panFrameMs": 32.69999999552965,
+        "pointerCommitMs": 0.9000000059604645,
+        "pointerFrameMs": 32.099999994039536,
+        "heapMiB": 7.05743408203125
+      }
+    },
+    "500": {
+      "samples": [
+        {
+          "initialCommitMs": 44.69999999552965,
+          "panCommitMs": 0.8000000044703484,
+          "panFrameMs": 31.19999999552965,
+          "pointerCommitMs": 0.7999999970197678,
+          "pointerFrameMs": 32.899999998509884,
+          "heapMiB": 15.621818542480469
+        },
+        {
+          "initialCommitMs": 49.100000001490116,
+          "panCommitMs": 0.8000000044703484,
+          "panFrameMs": 32.70000000298023,
+          "pointerCommitMs": 0.8000000044703484,
+          "pointerFrameMs": 32.100000001490116,
+          "heapMiB": 16.44968032836914
+        },
+        {
+          "initialCommitMs": 59.79999998211861,
+          "panCommitMs": 1.2999999970197678,
+          "panFrameMs": 31.899999998509884,
+          "pointerCommitMs": 1.2000000029802322,
+          "pointerFrameMs": 32.399999998509884,
+          "heapMiB": 25.57278823852539
+        }
+      ],
+      "median": {
+        "initialCommitMs": 49.100000001490116,
+        "panCommitMs": 0.8000000044703484,
+        "panFrameMs": 31.899999998509884,
+        "pointerCommitMs": 0.8000000044703484,
+        "pointerFrameMs": 32.399999998509884,
+        "heapMiB": 16.44968032836914
+      }
+    },
+    "1000": {
+      "samples": [
+        {
+          "initialCommitMs": 108.89999998360872,
+          "panCommitMs": 0.8999999985098839,
+          "panFrameMs": 32.79999999701977,
+          "pointerCommitMs": 0.8000000044703484,
+          "pointerFrameMs": 32,
+          "heapMiB": 12.817642211914062
+        },
+        {
+          "initialCommitMs": 89.5,
+          "panCommitMs": 1.0999999940395355,
+          "panFrameMs": 32.600000001490116,
+          "pointerCommitMs": 0.8999999985098839,
+          "pointerFrameMs": 32.30000000447035,
+          "heapMiB": 12.713897705078125
+        },
+        {
+          "initialCommitMs": 82.10000001639128,
+          "panCommitMs": 0.8999999985098839,
+          "panFrameMs": 32.100000001490116,
+          "pointerCommitMs": 0.8999999985098839,
+          "pointerFrameMs": 32.79999999701977,
+          "heapMiB": 28.57183074951172
+        }
+      ],
+      "median": {
+        "initialCommitMs": 89.5,
+        "panCommitMs": 0.8999999985098839,
+        "panFrameMs": 32.600000001490116,
+        "pointerCommitMs": 0.8999999985098839,
+        "pointerFrameMs": 32.30000000447035,
+        "heapMiB": 12.817642211914062
+      }
+    }
+  }
+}
