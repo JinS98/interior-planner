@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { NumericTextInput } from '../../components/inputs/NumericTextInput';
 import type {
   LayoutObject,
   ObjectAppearance,
@@ -190,51 +191,40 @@ export function AutoPlacementPanel({
                   ?
                 </button>
               </div>
-              <input
+              <NumericTextInput
                 id="auto-placement-grid-step"
-                type="number"
-                min="0"
-                max="5"
-                step="0.1"
+                min={0}
+                max={5}
                 value={options.gridStepMeters}
-                onChange={(event) => changeOptions({ gridStepMeters: Number(event.target.value) })}
+                onCommit={(gridStepMeters) => changeOptions({ gridStepMeters })}
               />
             </div>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>최소 통로 폭 (m)</span>
-              <input
-                type="number"
-                min="0"
-                max="5"
-                step="0.1"
+              <NumericTextInput
+                min={0}
+                max={5}
                 value={options.minimumAisleWidthMeters}
-                onChange={(event) =>
-                  changeOptions({ minimumAisleWidthMeters: Number(event.target.value) })
-                }
+                onCommit={(minimumAisleWidthMeters) => changeOptions({ minimumAisleWidthMeters })}
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>벽 여유 (m)</span>
-              <input
-                type="number"
-                min="0"
-                max="5"
-                step="0.1"
+              <NumericTextInput
+                min={0}
+                max={5}
                 value={options.wallClearanceMeters}
-                onChange={(event) =>
-                  changeOptions({ wallClearanceMeters: Number(event.target.value) })
-                }
+                onCommit={(wallClearanceMeters) => changeOptions({ wallClearanceMeters })}
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>최대 배치 수</span>
-              <input
-                type="number"
-                min="1"
+              <NumericTextInput
+                min={1}
                 max={maxAllowed}
-                step="1"
+                integer
                 value={options.maxPlacements}
-                onChange={(event) => changeOptions({ maxPlacements: Number(event.target.value) })}
+                onCommit={(maxPlacements) => changeOptions({ maxPlacements })}
               />
             </label>
           </div>

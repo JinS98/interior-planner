@@ -22,15 +22,3 @@ body {
 button {
   font: inherit;
 }
-
-/* 숫자 입력은 직접 입력만 사용하고 브라우저 기본 증감 화살표를 숨긴다. */
-input[type='number'] {
-  appearance: textfield;
-  -moz-appearance: textfield;
-}
-
-input[type='number']::-webkit-inner-spin-button,
-input[type='number']::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}

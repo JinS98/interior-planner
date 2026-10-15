@@ -154,6 +154,28 @@
     font-size: 11px;
   }
 }
+.boardToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #718099;
+  font-size: 11px;
+  button {
+    padding: 5px 9px;
+    border: 1px solid #dce2ec;
+    border-radius: 6px;
+    background: #fff;
+    color: #3955bd;
+    font: inherit;
+    cursor: pointer;
+    &[aria-pressed='true'] {
+      border-color: #526fe1;
+      background: #f2f5ff;
+    }
+  }
+}
 .board {
   display: block;
   width: 100%;
@@ -165,6 +187,12 @@
     outline: 2px solid #526fe1;
     outline-offset: 2px;
   }
+}
+.marqueeSelection {
+  fill: rgb(82 111 225 / 13%);
+  stroke: #526fe1;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
 }
 .snapGuide {
   line {
@@ -207,27 +235,6 @@
     border-radius: 6px;
     color: #293850;
     font: inherit;
-  }
-}
-.deleteButton {
-  margin-top: 8px;
-  padding: 7px;
-  border: 1px solid #e5a8ae;
-  border-radius: 7px;
-  background: #fff8f8;
-  color: #a93645;
-  cursor: pointer;
-}
-.properties button:not(.deleteButton) {
-  padding: 7px;
-  border: 1px solid #dce2ec;
-  border-radius: 7px;
-  background: #fff;
-  color: #3955bd;
-  cursor: pointer;
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.45;
   }
 }
 .footer {

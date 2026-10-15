@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import { screenToWorld, worldToScreen } from '../../domain/geometry/coordinates';
 import { snapRightAngle } from '../../domain/geometry/angles';
 import { LayoutObjectShape } from '../../components/editor/LayoutObjectShape';
+import { NumericTextInput } from '../../components/inputs/NumericTextInput';
 import {
   DEFAULT_OBJECT_ARRAY,
   isValidObjectArray,
@@ -9,7 +10,12 @@ import {
   objectArrayFootprint,
   type ObjectArrayOptions,
 } from './array';
-import { layoutObjectFromPaletteItem, OBJECT_SHAPES } from './catalog';
+import {
+  layoutObjectFromPaletteItem,
+  MAX_OBJECT_SIZE_METERS,
+  MIN_OBJECT_SIZE_METERS,
+  OBJECT_SHAPES,
+} from './catalog';
 import {
   commitBuilderEdit,
   EMPTY_BUILDER_HISTORY,
@@ -33,6 +39,7 @@ import {
   objectRotationHandlePoint,
 } from './hitTest';
 import { snapObjectPlacement, type ObjectPlacementSnap } from './snap';
+import { objectsInSelectionRect, selectionRectBetween } from './selection';
 import type { LayoutObject, PaletteItem, Point, Viewport } from '../../types/layout';
 import styles from './SetBuilder.module.scss';
 
@@ -42,6 +49,14 @@ const VIEWPORT: Viewport = { x: BOARD_WIDTH / 2, y: BOARD_HEIGHT / 2, scale: 70 
 
 function roundMeters(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+function sharedNumber(
+  objects: LayoutObject[],
+  field: 'width' | 'height' | 'rotation',
+): number | null {
+  const first = objects[0]?.[field];
+  return objects.every((object) => object[field] === first) ? first : null;
 }
 
 function snapDescription(snap: ObjectPlacementSnap | null): string {
@@ -69,7 +84,8 @@ export function SetBuilder({
   const [history, setHistory] = useState(EMPTY_BUILDER_HISTORY);
   const objects = history.present;
   const [arrayOptions, setArrayOptions] = useState<ObjectArrayOptions>(DEFAULT_OBJECT_ARRAY);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [marqueeRect, setMarqueeRect] = useState<{ start: Point; current: Point } | null>(null);
   const [hoverPoint, setHoverPoint] = useState<Point | null>(null);
   const [dragSnap, setDragSnap] = useState<ObjectPlacementSnap | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -78,11 +94,21 @@ export function SetBuilder({
     objectId: string;
     mode: 'move' | 'resize' | 'rotate';
     start: Point;
-    origin: Point;
     original: LayoutObject;
+    movingIds: string[];
     before: LayoutObject[];
   } | null>(null);
-  const selected = objects.find((object) => object.id === selectedId);
+  const marquee = useRef<{
+    pointerId: number;
+    start: Point;
+    selectedBefore: string[];
+    additive: boolean;
+  } | null>(null);
+  const selectedObjects = objects.filter((object) => selectedIds.includes(object.id));
+  const selected = selectedObjects.length === 1 ? selectedObjects[0] : null;
+  const sameTypeSelection =
+    selectedObjects.length > 1 &&
+    selectedObjects.every((object) => object.type === selectedObjects[0].type);
   const selectedTop = selected
     ? worldToScreen(
         rotatePoint(
@@ -95,7 +121,7 @@ export function SetBuilder({
     : null;
   const activeItem = items.find((item) => item.id === activeItemId);
   const previewSnap =
-    activeItem && hoverPoint && !drag.current
+    activeItem && hoverPoint && !drag.current && !marquee.current
       ? snapObjectPlacement(
           hoverPoint,
           VIEWPORT,
@@ -115,12 +141,16 @@ export function SetBuilder({
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
+        return;
       event.preventDefault();
       event.stopPropagation();
-      setSelectedId(null);
+      setSelectedIds([]);
       setActiveItemId(null);
       setHoverPoint(null);
       setDragSnap(null);
+      setMarqueeRect(null);
+      marquee.current = null;
       const before = drag.current?.before;
       if (before) setHistory((current) => previewBuilderEdit(current, before));
       drag.current = null;
@@ -138,34 +168,61 @@ export function SetBuilder({
   }
 
   function updateSelected(patch: Partial<LayoutObject>) {
-    if (!selectedId) return;
+    if (!selected) return;
     setHistory((current) =>
       commitBuilderEdit(
         current,
         current.present.map((object) =>
-          object.id === selectedId ? { ...object, ...patch } : object,
+          object.id === selected.id ? { ...object, ...patch } : object,
         ),
       ),
     );
   }
 
-  function removeSelected() {
-    if (!selectedId) return;
+  function updateSelectedGroup(change: (object: LayoutObject) => LayoutObject) {
+    if (!sameTypeSelection) return;
+    const selectedSet = new Set(selectedIds);
     setHistory((current) =>
-      commitBuilderEdit(current, current.present.filter((object) => object.id !== selectedId)),
+      commitBuilderEdit(
+        current,
+        current.present.map((object) => (selectedSet.has(object.id) ? change(object) : object)),
+      ),
     );
-    setSelectedId(null);
+  }
+
+  function removeSelected() {
+    if (selectedIds.length === 0) return;
+    const selectedSet = new Set(selectedIds);
+    setHistory((current) =>
+      commitBuilderEdit(
+        current,
+        current.present.filter((object) => !selectedSet.has(object.id)),
+      ),
+    );
+    setSelectedIds([]);
+  }
+
+  function duplicateSelected() {
+    if (selectedObjects.length === 0 || objects.length + selectedObjects.length > 100) return;
+    const copies = selectedObjects.map((object) => ({
+      ...object,
+      id: crypto.randomUUID(),
+      x: roundMeters(object.x + 0.2),
+      y: roundMeters(object.y + 0.2),
+    }));
+    setHistory((current) => commitBuilderEdit(current, [...current.present, ...copies]));
+    setSelectedIds(copies.map((object) => object.id));
   }
 
   function undoEdit() {
     setHistory(undoBuilderEdit);
-    setSelectedId(null);
+    setSelectedIds([]);
     setDragSnap(null);
   }
 
   function redoEdit() {
     setHistory(redoBuilderEdit);
-    setSelectedId(null);
+    setSelectedIds([]);
     setDragSnap(null);
   }
 
@@ -180,7 +237,7 @@ export function SetBuilder({
     if (event.button !== 0) return;
     event.currentTarget.focus();
     const point = boardPoint(event);
-    if (selected) {
+    if (selected && !event.shiftKey) {
       const mode = isNearObjectRotationHandle(selected, point, VIEWPORT)
         ? 'rotate'
         : isNearObjectResizeHandle(selected, point, VIEWPORT)
@@ -192,8 +249,8 @@ export function SetBuilder({
           objectId: selected.id,
           mode,
           start: point,
-          origin: { x: selected.x, y: selected.y },
           original: selected,
+          movingIds: [selected.id],
           before: objects,
         };
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -203,22 +260,39 @@ export function SetBuilder({
     }
     const hit = hitTestLayoutObject(objects, point, VIEWPORT);
     if (hit) {
-      setSelectedId(hit.id);
+      setActiveItemId(null);
+      if (event.shiftKey) {
+        setSelectedIds((current) =>
+          current.includes(hit.id) ? current.filter((id) => id !== hit.id) : [...current, hit.id],
+        );
+        setHoverPoint(null);
+        return;
+      }
+      const movingIds = selectedIds.includes(hit.id) ? selectedIds : [hit.id];
+      setSelectedIds(movingIds);
       setHoverPoint(null);
       drag.current = {
         pointerId: event.pointerId,
         objectId: hit.id,
         mode: 'move',
         start: point,
-        origin: { x: hit.x, y: hit.y },
         original: hit,
+        movingIds,
         before: objects,
       };
       event.currentTarget.setPointerCapture(event.pointerId);
       return;
     }
-    if (!activeItem) {
-      setSelectedId(null);
+    if (!activeItem || event.shiftKey) {
+      marquee.current = {
+        pointerId: event.pointerId,
+        start: point,
+        selectedBefore: selectedIds,
+        additive: event.shiftKey,
+      };
+      setMarqueeRect({ start: point, current: point });
+      setHoverPoint(null);
+      event.currentTarget.setPointerCapture(event.pointerId);
       return;
     }
     const count = arrayOptions.columns * arrayOptions.rows;
@@ -241,7 +315,7 @@ export function SetBuilder({
       ),
     );
     setHistory((current) => commitBuilderEdit(current, [...current.present, ...created]));
-    setSelectedId(created.at(-1)!.id);
+    setSelectedIds(created.map((object) => object.id));
     setHoverPoint(point);
     setError(null);
   }
@@ -249,6 +323,10 @@ export function SetBuilder({
   function handlePointerMove(event: PointerEvent<SVGSVGElement>) {
     const currentDrag = drag.current;
     const point = boardPoint(event);
+    if (marquee.current?.pointerId === event.pointerId) {
+      setMarqueeRect({ start: marquee.current.start, current: point });
+      return;
+    }
     if (!currentDrag || currentDrag.pointerId !== event.pointerId) {
       setHoverPoint(point);
       return;
@@ -273,33 +351,70 @@ export function SetBuilder({
       { x: point.x - currentDrag.start.x, y: point.y - currentDrag.start.y },
       { x: 0, y: 0, scale: VIEWPORT.scale },
     );
-    const moving = objects.find((object) => object.id === currentDrag.objectId);
-    if (!moving) return;
+    const moving = currentDrag.original;
     const rawCenter = {
-      x: currentDrag.origin.x + delta.x + moving.width / 2,
-      y: currentDrag.origin.y + delta.y + moving.height / 2,
+      x: moving.x + delta.x + moving.width / 2,
+      y: moving.y + delta.y + moving.height / 2,
     };
+    const movingSet = new Set(currentDrag.movingIds);
     const snap = snapObjectPlacement(
       worldToScreen(rawCenter, VIEWPORT),
       VIEWPORT,
-      objects.filter((object) => object.id !== moving.id),
+      currentDrag.before.filter((object) => !movingSet.has(object.id)),
       moving,
     );
     setDragSnap(snap);
+    const snappedDelta = {
+      x: snap.center.x - (moving.x + moving.width / 2),
+      y: snap.center.y - (moving.y + moving.height / 2),
+    };
     setHistory((current) =>
       previewBuilderEdit(
         current,
-        current.present.map((object) =>
-          object.id === currentDrag.objectId
+        currentDrag.before.map((object) =>
+          movingSet.has(object.id)
             ? {
                 ...object,
-                x: roundMeters(snap.center.x - object.width / 2),
-                y: roundMeters(snap.center.y - object.height / 2),
+                x: roundMeters(object.x + snappedDelta.x),
+                y: roundMeters(object.y + snappedDelta.y),
               }
             : object,
         ),
       ),
     );
+  }
+
+  function finishPointer(event: PointerEvent<SVGSVGElement>, cancelled: boolean) {
+    const currentMarquee = marquee.current;
+    if (currentMarquee?.pointerId === event.pointerId) {
+      if (!cancelled) {
+        const point = boardPoint(event);
+        const moved =
+          Math.hypot(point.x - currentMarquee.start.x, point.y - currentMarquee.start.y) >= 4;
+        const hitIds = moved
+          ? objectsInSelectionRect(
+              objects,
+              selectionRectBetween(currentMarquee.start, point),
+              VIEWPORT,
+            )
+          : [];
+        setSelectedIds(
+          currentMarquee.additive
+            ? [...new Set([...currentMarquee.selectedBefore, ...hitIds])]
+            : hitIds,
+        );
+      }
+      marquee.current = null;
+      setMarqueeRect(null);
+    }
+    const before = drag.current?.pointerId === event.pointerId ? drag.current.before : null;
+    if (before) {
+      setHistory((current) =>
+        cancelled ? previewBuilderEdit(current, before) : finishBuilderGesture(current, before),
+      );
+      drag.current = null;
+      setDragSnap(null);
+    }
   }
 
   return (
@@ -311,13 +426,27 @@ export function SetBuilder({
         aria-label="내 세트 만들기"
         onKeyDownCapture={(event) => {
           const target = event.target;
-          const editingText = target instanceof HTMLInputElement ||
+          const editingText =
+            target instanceof HTMLInputElement ||
             target instanceof HTMLTextAreaElement ||
             target instanceof HTMLSelectElement ||
             (target instanceof HTMLElement && target.isContentEditable);
           if (editingText) return;
           const command = (event.ctrlKey || event.metaKey) && !event.altKey;
           const key = event.key.toLowerCase();
+          if (command && key === 'a') {
+            event.preventDefault();
+            event.stopPropagation();
+            setSelectedIds(objects.map((object) => object.id));
+            setActiveItemId(null);
+            return;
+          }
+          if (command && key === 'd') {
+            event.preventDefault();
+            event.stopPropagation();
+            duplicateSelected();
+            return;
+          }
           if (command && (key === 'z' || key === 'y')) {
             event.preventDefault();
             event.stopPropagation();
@@ -331,7 +460,7 @@ export function SetBuilder({
             return;
           }
           event.stopPropagation();
-          if ((event.key === 'Delete' || event.key === 'Backspace') && selectedId) {
+          if ((event.key === 'Delete' || event.key === 'Backspace') && selectedIds.length > 0) {
             event.preventDefault();
             removeSelected();
           }
@@ -340,12 +469,22 @@ export function SetBuilder({
         <header className={styles.header}>
           <div>
             <h2>내 세트 만들기</h2>
-            <p>물품을 골라 배치하세요. 자동 정렬과 간격 보정이 적용됩니다. 작업판에서 Backspace/Delete로 삭제, Ctrl+Z로 되돌리기, Esc로 선택 해제가 가능합니다.</p>
+            <p>
+              물품을 골라 배치하세요. Shift+클릭 또는 선택 모드에서 빈 곳 드래그로 여러 개를
+              선택하고 함께 이동할 수 있습니다. Ctrl/Cmd+A 전체 선택 · Ctrl/Cmd+D 복제 · Ctrl/Cmd+Z
+              되돌리기 · Backspace/Delete 삭제 · Esc 선택 해제
+            </p>
           </div>
           <div className={styles.headerActions}>
-            <button type="button" disabled={history.past.length === 0} onClick={undoEdit}>되돌리기</button>
-            <button type="button" disabled={history.future.length === 0} onClick={redoEdit}>다시 실행</button>
-            <button type="button" onClick={onClose} aria-label="세트 만들기 닫기">×</button>
+            <button type="button" disabled={history.past.length === 0} onClick={undoEdit}>
+              되돌리기
+            </button>
+            <button type="button" disabled={history.future.length === 0} onClick={redoEdit}>
+              다시 실행
+            </button>
+            <button type="button" onClick={onClose} aria-label="세트 만들기 닫기">
+              ×
+            </button>
           </div>
         </header>
         <div className={styles.content}>
@@ -356,7 +495,10 @@ export function SetBuilder({
                 key={item.id}
                 type="button"
                 aria-pressed={activeItemId === item.id}
-                onClick={() => setActiveItemId(item.id)}
+                onClick={() => {
+                  setActiveItemId(item.id);
+                  setSelectedIds([]);
+                }}
               >
                 <span>{item.name}</span>
                 <small>
@@ -368,49 +510,58 @@ export function SetBuilder({
               <legend>한 번에 배치</legend>
               <label>
                 가로 개수
-                <input
-                  type="number"
-                  min="1"
-                  max={Math.floor(100 / arrayOptions.rows)}
+                <NumericTextInput
                   value={arrayOptions.columns}
-                  onChange={(event) => updateArray({ columns: Number(event.target.value) })}
+                  min={1}
+                  max={Math.floor(100 / arrayOptions.rows)}
+                  integer
+                  onCommit={(columns) => updateArray({ columns })}
                 />
               </label>
               <label>
                 세로 개수
-                <input
-                  type="number"
-                  min="1"
-                  max={Math.floor(100 / arrayOptions.columns)}
+                <NumericTextInput
                   value={arrayOptions.rows}
-                  onChange={(event) => updateArray({ rows: Number(event.target.value) })}
+                  min={1}
+                  max={Math.floor(100 / arrayOptions.columns)}
+                  integer
+                  onCommit={(rows) => updateArray({ rows })}
                 />
               </label>
               <label>
                 가로 간격 (m)
-                <input
-                  type="number"
-                  min="0"
-                  max="20"
-                  step="0.1"
+                <NumericTextInput
+                  min={0}
+                  max={20}
                   value={arrayOptions.gapX}
-                  onChange={(event) => updateArray({ gapX: Number(event.target.value) })}
+                  onCommit={(gapX) => updateArray({ gapX })}
                 />
               </label>
               <label>
                 세로 간격 (m)
-                <input
-                  type="number"
-                  min="0"
-                  max="20"
-                  step="0.1"
+                <NumericTextInput
+                  min={0}
+                  max={20}
                   value={arrayOptions.gapY}
-                  onChange={(event) => updateArray({ gapY: Number(event.target.value) })}
+                  onCommit={(gapY) => updateArray({ gapY })}
                 />
               </label>
             </fieldset>
           </aside>
           <div className={styles.boardArea}>
+            <div className={styles.boardToolbar}>
+              <button
+                type="button"
+                aria-pressed={!activeItemId}
+                onClick={() => {
+                  setActiveItemId(null);
+                  setHoverPoint(null);
+                }}
+              >
+                선택 모드
+              </button>
+              <span>{selectedIds.length > 0 ? `${selectedIds.length}개 선택` : '선택 없음'}</span>
+            </div>
             <svg
               tabIndex={0}
               className={styles.board}
@@ -419,30 +570,17 @@ export function SetBuilder({
               aria-label={`세트 작업판, 배치한 물품 ${objects.length}개`}
               onContextMenu={(event) => {
                 event.preventDefault();
-                setSelectedId(null);
+                setSelectedIds([]);
                 setActiveItemId(null);
                 setHoverPoint(null);
+                marquee.current = null;
+                setMarqueeRect(null);
               }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
-              onPointerUp={() => {
-                const before = drag.current?.before;
-                if (before) setHistory((current) => finishBuilderGesture(current, before));
-                drag.current = null;
-                setDragSnap(null);
-              }}
-              onPointerCancel={() => {
-                const before = drag.current?.before;
-                if (before) setHistory((current) => previewBuilderEdit(current, before));
-                drag.current = null;
-                setDragSnap(null);
-              }}
-              onLostPointerCapture={() => {
-                const before = drag.current?.before;
-                if (before) setHistory((current) => previewBuilderEdit(current, before));
-                drag.current = null;
-                setDragSnap(null);
-              }}
+              onPointerUp={(event) => finishPointer(event, false)}
+              onPointerCancel={(event) => finishPointer(event, true)}
+              onLostPointerCapture={(event) => finishPointer(event, true)}
               onPointerLeave={() => setHoverPoint(null)}
             >
               <defs>
@@ -455,6 +593,16 @@ export function SetBuilder({
               {objects.map((object) => (
                 <LayoutObjectShape key={object.id} object={object} viewport={VIEWPORT} />
               ))}
+              {marqueeRect && (
+                <rect
+                  className={styles.marqueeSelection}
+                  x={Math.min(marqueeRect.start.x, marqueeRect.current.x)}
+                  y={Math.min(marqueeRect.start.y, marqueeRect.current.y)}
+                  width={Math.abs(marqueeRect.current.x - marqueeRect.start.x)}
+                  height={Math.abs(marqueeRect.current.y - marqueeRect.start.y)}
+                  pointerEvents="none"
+                />
+              )}
               <g opacity="0.55" pointerEvents="none">
                 {previewObjects.map((object) => (
                   <LayoutObjectShape key={object.id} object={object} viewport={VIEWPORT} preview />
@@ -513,26 +661,26 @@ export function SetBuilder({
                   )}
                 </g>
               )}
-              {selected &&
-                (() => {
-                  const origin = worldToScreen({ x: selected.x, y: selected.y }, VIEWPORT);
-                  const width = selected.width * VIEWPORT.scale;
-                  const height = selected.height * VIEWPORT.scale;
-                  return (
-                    <rect
-                      x={origin.x}
-                      y={origin.y}
-                      width={width}
-                      height={height}
-                      transform={`rotate(${selected.rotation} ${origin.x + width / 2} ${origin.y + height / 2})`}
-                      fill="none"
-                      stroke="#526fe1"
-                      strokeWidth="2"
-                      strokeDasharray="5 4"
-                      pointerEvents="none"
-                    />
-                  );
-                })()}
+              {selectedObjects.map((object) => {
+                const origin = worldToScreen({ x: object.x, y: object.y }, VIEWPORT);
+                const width = object.width * VIEWPORT.scale;
+                const height = object.height * VIEWPORT.scale;
+                return (
+                  <rect
+                    key={object.id}
+                    x={origin.x}
+                    y={origin.y}
+                    width={width}
+                    height={height}
+                    transform={`rotate(${object.rotation} ${origin.x + width / 2} ${origin.y + height / 2})`}
+                    fill="none"
+                    stroke="#526fe1"
+                    strokeWidth="2"
+                    strokeDasharray="5 4"
+                    pointerEvents="none"
+                  />
+                );
+              })}
               {selected && (
                 <g pointerEvents="none">
                   <line
@@ -563,80 +711,60 @@ export function SetBuilder({
               )}
             </svg>
             <p>
-              {objects.length}개 배치됨 · {snapDescription(dragSnap ?? previewSnap)} · 물품을
-              드래그해 이동
+              {objects.length}개 배치됨 ·{' '}
+              {activeItem ? 'Shift+빈 곳 드래그로 영역 선택' : '빈 곳 드래그로 영역 선택'} ·{' '}
+              {snapDescription(dragSnap ?? previewSnap)}
             </p>
           </div>
           <aside className={styles.properties} aria-label="세트 물품 편집">
-            <h3>선택한 물품</h3>
+            <h3>{selectedIds.length > 1 ? `물품 ${selectedIds.length}개 선택` : '선택한 물품'}</h3>
             {selected ? (
               <>
                 <strong>{selected.name}</strong>
                 <label>
                   X 좌표 (m)
-                  <input
-                    type="number"
-                    step="0.1"
+                  <NumericTextInput
+                    key={`${selected.id}-x`}
                     value={selected.x}
-                    onChange={(event) => {
-                      const x = Number(event.target.value);
-                      if (Number.isFinite(x)) updateSelected({ x });
-                    }}
+                    onCommit={(x) => updateSelected({ x })}
                   />
                 </label>
                 <label>
                   Y 좌표 (m)
-                  <input
-                    type="number"
-                    step="0.1"
+                  <NumericTextInput
+                    key={`${selected.id}-y`}
                     value={selected.y}
-                    onChange={(event) => {
-                      const y = Number(event.target.value);
-                      if (Number.isFinite(y)) updateSelected({ y });
-                    }}
+                    onCommit={(y) => updateSelected({ y })}
                   />
                 </label>
                 <label>
                   가로 (m)
-                  <input
-                    type="number"
-                    min="0.1"
-                    max="20"
-                    step="0.1"
+                  <NumericTextInput
+                    key={`${selected.id}-width`}
+                    min={0.1}
+                    max={20}
                     value={selected.width}
-                    onChange={(event) => {
-                      const width = Number(event.target.value);
-                      if (width >= 0.1 && width <= 20) updateSelected({ width });
-                    }}
+                    onCommit={(width) => updateSelected({ width })}
                   />
                 </label>
                 <label>
                   세로 (m)
-                  <input
-                    type="number"
-                    min="0.1"
-                    max="20"
-                    step="0.1"
+                  <NumericTextInput
+                    key={`${selected.id}-height`}
+                    min={0.1}
+                    max={20}
                     value={selected.height}
-                    onChange={(event) => {
-                      const height = Number(event.target.value);
-                      if (height >= 0.1 && height <= 20) updateSelected({ height });
-                    }}
+                    onCommit={(height) => updateSelected({ height })}
                   />
                 </label>
                 <label>
                   회전 (°)
-                  <input
-                    type="number"
-                    step="15"
+                  <NumericTextInput
+                    key={`${selected.id}-rotation`}
                     value={selected.rotation}
-                    onChange={(event) => {
-                      const rotation = Number(event.target.value);
-                      if (Number.isFinite(rotation)) updateSelected({ rotation });
-                    }}
-                    onBlur={() =>
+                    onCommit={(rotation) =>
                       updateSelected({
-                        rotation: normalizeObjectRotation(snapRightAngle(selected.rotation)),
+                        rotation: normalizeObjectRotation(snapRightAngle(rotation)),
                       })
                     }
                   />
@@ -666,33 +794,116 @@ export function SetBuilder({
                     onChange={(event) => updateSelected({ color: event.target.value })}
                   />
                 </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (objects.length >= 100) return;
-                    const duplicate = {
-                      ...selected,
-                      id: crypto.randomUUID(),
-                      x: roundMeters(selected.x + 0.2),
-                      y: roundMeters(selected.y + 0.2),
-                    };
-                    setHistory((current) => commitBuilderEdit(current, [...current.present, duplicate]));
-                    setSelectedId(duplicate.id);
-                  }}
-                  disabled={objects.length >= 100}
-                >
-                  선택한 물품 복제
-                </button>
-                <button
-                  type="button"
-                  className={styles.deleteButton}
-                  onClick={removeSelected}
-                >
-                  선택한 물품 삭제
-                </button>
               </>
+            ) : sameTypeSelection ? (
+              <>
+                <strong>
+                  {selectedObjects[0].name} · {selectedObjects.length}개
+                </strong>
+                <p>입력한 값이 선택한 물품 모두에 적용됩니다. 위치는 이동량만큼 함께 바뀝니다.</p>
+                <label>
+                  X 이동 (m)
+                  <NumericTextInput
+                    value={0}
+                    onCommit={(distance) =>
+                      updateSelectedGroup((object) => ({
+                        ...object,
+                        x: roundMeters(object.x + distance),
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  Y 이동 (m)
+                  <NumericTextInput
+                    value={0}
+                    onCommit={(distance) =>
+                      updateSelectedGroup((object) => ({
+                        ...object,
+                        y: roundMeters(object.y + distance),
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  가로 (m)
+                  <NumericTextInput
+                    value={sharedNumber(selectedObjects, 'width')}
+                    placeholder="값 다름"
+                    min={MIN_OBJECT_SIZE_METERS}
+                    max={MAX_OBJECT_SIZE_METERS}
+                    onCommit={(width) => updateSelectedGroup((object) => ({ ...object, width }))}
+                  />
+                </label>
+                <label>
+                  세로 (m)
+                  <NumericTextInput
+                    value={sharedNumber(selectedObjects, 'height')}
+                    placeholder="값 다름"
+                    min={MIN_OBJECT_SIZE_METERS}
+                    max={MAX_OBJECT_SIZE_METERS}
+                    onCommit={(height) => updateSelectedGroup((object) => ({ ...object, height }))}
+                  />
+                </label>
+                <label>
+                  회전 (°)
+                  <NumericTextInput
+                    value={sharedNumber(selectedObjects, 'rotation')}
+                    placeholder="값 다름"
+                    onCommit={(rotation) =>
+                      updateSelectedGroup((object) => ({
+                        ...object,
+                        rotation: normalizeObjectRotation(snapRightAngle(rotation)),
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  모양
+                  <select
+                    value={
+                      selectedObjects.every((object) => object.shape === selectedObjects[0].shape)
+                        ? selectedObjects[0].shape
+                        : ''
+                    }
+                    onChange={(event) =>
+                      updateSelectedGroup((object) => ({
+                        ...object,
+                        shape: event.target.value as LayoutObject['shape'],
+                      }))
+                    }
+                  >
+                    <option value="" disabled>
+                      값 다름
+                    </option>
+                    {OBJECT_SHAPES.map(({ id, label }) => (
+                      <option key={id} value={id}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  색상
+                  <input
+                    type="color"
+                    value={selectedObjects[0].color}
+                    onChange={(event) =>
+                      updateSelectedGroup((object) => ({ ...object, color: event.target.value }))
+                    }
+                  />
+                </label>
+                {selectedObjects.some((object) => object.color !== selectedObjects[0].color) && (
+                  <p>색상이 서로 다릅니다. 새 색을 선택하면 모두 같은 색으로 바뀝니다.</p>
+                )}
+              </>
+            ) : selectedObjects.length > 1 ? (
+              <p>
+                서로 다른 종류의 물품을 선택했습니다. 같은 종류만 선택하면 크기와 속성을 함께 수정할
+                수 있습니다.
+              </p>
             ) : (
-              <p>작업판에서 물품을 선택하면 크기·회전·색상을 바꿀 수 있습니다.</p>
+              <p>물품을 클릭해 편집하거나 Shift+클릭·빈 곳 드래그로 여러 개를 선택하세요.</p>
             )}
           </aside>
         </div>

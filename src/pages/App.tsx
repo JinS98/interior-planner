@@ -14,6 +14,7 @@ import { rotateRoomVertices } from '../features/room/rotation';
 import { TOOL_SHORTCUTS } from '../features/editor/shortcuts';
 import { redoEditorCommand, undoEditorCommand } from '../features/history/actions';
 import { FloorBoard } from '../features/floor/FloorBoard';
+import { NumericTextInput } from '../components/inputs/NumericTextInput';
 import {
   AutoPlacementPanel,
   type AutoPlacementPreview,
@@ -137,35 +138,16 @@ function ObjectSizeInput({
   value: number;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState<string | null>(null);
   return (
     <label className={styles.objectSizeField} htmlFor={id}>
       {label}
       <span>
-        <input
+        <NumericTextInput
           id={id}
-          type="number"
           min={MIN_OBJECT_SIZE_METERS}
           max={MAX_OBJECT_SIZE_METERS}
-          step="0.1"
-          inputMode="decimal"
-          value={draft ?? String(Number(value.toFixed(3)))}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={() => {
-            const next = Number(draft);
-            if (
-              draft !== null &&
-              draft !== '' &&
-              Number.isFinite(next) &&
-              next >= MIN_OBJECT_SIZE_METERS &&
-              next <= MAX_OBJECT_SIZE_METERS
-            )
-              onCommit(next);
-            setDraft(null);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') event.currentTarget.blur();
-          }}
+          value={Number(value.toFixed(3))}
+          onCommit={onCommit}
         />
         m
       </span>
@@ -184,29 +166,14 @@ function ObjectCoordinateInput({
   value: number;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState<string | null>(null);
   return (
     <label className={styles.objectSizeField} htmlFor={id}>
       {label}
       <span>
-        <input
+        <NumericTextInput
           id={id}
-          type="number"
-          step="any"
-          inputMode="decimal"
-          value={draft ?? String(Number(value.toFixed(3)))}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={() => {
-            if (draft !== null && draft.trim() !== '') {
-              const next = Number(draft);
-              if (Number.isFinite(next)) onCommit(Number(next.toFixed(3)));
-            }
-            setDraft(null);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') event.currentTarget.blur();
-            if (event.key === 'Escape') setDraft(null);
-          }}
+          value={Number(value.toFixed(3))}
+          onCommit={(next) => onCommit(Number(next.toFixed(3)))}
         />
         m
       </span>
@@ -229,38 +196,15 @@ function ObjectArrayInput({
   step: number;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState<string | null>(null);
   return (
     <label className={styles.arrayField}>
       {label}
-      <input
-        type="number"
+      <NumericTextInput
+        value={value}
         min={min}
         max={max}
-        step={step}
-        value={draft ?? String(value)}
-        onChange={(event) => {
-          const nextDraft = event.target.value;
-          setDraft(nextDraft);
-          const next = Number(nextDraft);
-          if (
-            nextDraft !== '' &&
-            Number.isFinite(next) &&
-            next >= min &&
-            next <= max &&
-            (step !== 1 || Number.isInteger(next))
-          )
-            onCommit(next);
-        }}
-        onBlur={() => {
-          const next = Number(draft);
-          if (draft !== null && draft !== '' && Number.isFinite(next)) onCommit(next);
-          setDraft(null);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') event.currentTarget.blur();
-          if (event.key === 'Escape') setDraft(null);
-        }}
+        integer={step === 1}
+        onCommit={onCommit}
       />
     </label>
   );
@@ -273,27 +217,15 @@ function ObjectRotationInput({
   rotation: number;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState<string | null>(null);
   return (
     <label className={styles.objectRotationField} htmlFor="selected-object-rotation">
       회전
       <span>
-        <input
+        <NumericTextInput
           id="selected-object-rotation"
-          type="number"
-          min={0}
-          max={359}
-          step={1}
-          value={draft ?? String(Math.round(rotation))}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={() => {
-            if (draft !== null && draft !== '' && Number.isFinite(Number(draft)))
-              onCommit(Number(draft));
-            setDraft(null);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') event.currentTarget.blur();
-          }}
+          integer
+          value={Math.round(rotation)}
+          onCommit={onCommit}
         />
         °
       </span>
@@ -400,9 +332,7 @@ function TargetAreaInput({
       <div className={styles.targetAreaControl}>
         <input
           id="target-area"
-          type="number"
-          min="0.000001"
-          step="any"
+          type="text"
           inputMode="decimal"
           placeholder="입력"
           value={value}
@@ -453,14 +383,15 @@ function WallLengthInput({
       <div className={styles.targetAreaControl}>
         <input
           id="wall-length"
-          type="number"
-          min="0.01"
-          step="any"
+          type="text"
           inputMode="decimal"
           value={draft ?? String(Number(lengthMeters.toFixed(3)))}
           onChange={(event) => setDraft(event.target.value)}
           onBlur={() => {
-            if (draft !== null) onCommit(Number(draft));
+            if (draft !== null && draft.trim() !== '') {
+              const next = Number(draft);
+              if (Number.isFinite(next) && next >= 0.01) onCommit(next);
+            }
             setDraft(null);
           }}
           onKeyDown={(event) => {
