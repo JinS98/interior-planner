@@ -23,11 +23,11 @@ describe('resizeObjectFromScreenDrag', () => {
     expect(next).toMatchObject({
       x: object.x,
       y: object.y,
-      width: 1.9,
+      width: object.width + 0.5,
       color: object.color,
       shape: object.shape,
     });
-    expect(next.height).toBeCloseTo(0.9);
+    expect(next.height).toBeCloseTo(object.height + 0.2);
   });
 
   it('clamps the smallest and largest allowed sizes', () => {

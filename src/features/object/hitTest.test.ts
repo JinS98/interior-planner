@@ -44,7 +44,7 @@ describe('object hit testing', () => {
 
   it('detects the selected object resize handle in screen pixels', () => {
     const object = layoutObjectFromPreset('floor-1', 'desk', { x: 1, y: 1 }, 'desk');
-    expect(isNearObjectResizeHandle(object, { x: 136, y: 108 }, viewport)).toBe(true);
+    expect(isNearObjectResizeHandle(object, { x: 120, y: 104 }, viewport)).toBe(true);
     expect(isNearObjectResizeHandle(object, { x: 100, y: 80 }, viewport)).toBe(false);
   });
 
@@ -53,7 +53,7 @@ describe('object hit testing', () => {
       ...layoutObjectFromPreset('floor-1', 'desk', { x: 2, y: 2 }, 'desk'),
       rotation: 90,
     };
-    expect(hitTestLayoutObject([object], { x: 160, y: 110 }, viewport)?.id).toBe('desk');
+    expect(hitTestLayoutObject([object], { x: 160, y: 125 }, viewport)?.id).toBe('desk');
     expect(hitTestLayoutObject([object], { x: 210, y: 160 }, viewport)).toBeNull();
     expect(
       isNearObjectResizeHandle(object, objectResizeHandlePoint(object, viewport), viewport),

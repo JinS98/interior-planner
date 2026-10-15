@@ -126,8 +126,8 @@ describe('selecting a furniture preset', () => {
     expect(useEditorStore.getState().objectPlacement.width).toBe(2);
     store.setPaletteItem(useProjectStore.getState().paletteItemsById.chair);
     expect(useEditorStore.getState().objectPlacement).toMatchObject({
-      width: 0.6,
-      height: 0.6,
+      width: 0.4,
+      height: 0.4,
       shape: 'circle',
     });
     store.setTool('select');

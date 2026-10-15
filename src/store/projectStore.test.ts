@@ -203,7 +203,7 @@ describe('custom object sets', () => {
       beforeTemplates + 1,
     );
     source[0].width = 4;
-    expect(useProjectStore.getState().setTemplatesById[template.id].members[0].width).toBe(1.4);
+    expect(useProjectStore.getState().setTemplatesById[template.id].members[0].width).toBe(1);
     const beforeObjects = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds;
     const beforeHistory = useProjectStore.getState().historyPast.length;
     const options = { columns: 2, rows: 1, gapX: 0.4, gapY: 0 };
@@ -227,7 +227,7 @@ describe('custom object sets', () => {
     expect(useProjectStore.getState().objectsById[placedIds[0]]).toMatchObject({
       color: '#E48A98',
       rotation: 90,
-      width: 1.4,
+      width: 1,
     });
     const placed = placedIds.map((id) => useProjectStore.getState().objectsById[id]);
     expect(placed[0].groupId).toBe(placed[1].groupId);
@@ -321,8 +321,8 @@ describe('createLayoutObject', () => {
     const ids = state.floorsById[LOCAL_FLOOR_ID].objectIds.slice(before);
     expect(ids).toHaveLength(3);
     expect(ids.map((id) => state.objectsById[id])).toMatchObject([
-      { type: 'desk', category: 'furniture', x: 2.3, y: 1.65, width: 1.4, height: 0.7 },
-      { type: 'chair', category: 'furniture', x: 4.7, y: 1.7, width: 0.6, height: 0.6 },
+      { type: 'desk', category: 'furniture', x: 2.5, y: 1.7, width: 1, height: 0.6 },
+      { type: 'chair', category: 'furniture', x: 4.8, y: 1.8, width: 0.4, height: 0.4 },
       {
         type: pc.id,
         name: 'PC',

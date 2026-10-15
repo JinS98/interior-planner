@@ -1,13 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import { worldToScreen } from '../../domain/geometry/coordinates';
 import type { Viewport } from '../../types/layout';
-import { layoutObjectFromPaletteItem, layoutObjectFromPreset } from './catalog';
+import {
+  defaultObjectAppearance,
+  layoutObjectFromPaletteItem,
+  layoutObjectFromPreset,
+} from './catalog';
 import { objectArrayCenters, objectArrayFootprint } from './array';
 import { snapObjectPlacement } from './snap';
 
 const viewport: Viewport = { x: 0, y: 0, scale: 80 };
-const desk = layoutObjectFromPreset('floor-1', 'desk', { x: 1, y: 2 }, 'desk-1');
-const chair = layoutObjectFromPreset('floor-1', 'chair', { x: 3, y: 2 }, 'chair-1');
+// These spacing scenarios use fixed footprints so palette default changes do not alter the geometry.
+const deskAt = (center: { x: number; y: number }, id: string) =>
+  layoutObjectFromPreset('floor-1', 'desk', center, id, {
+    ...defaultObjectAppearance('desk'),
+    width: 1.4,
+    height: 0.7,
+  });
+const chairAt = (center: { x: number; y: number }, id: string) =>
+  layoutObjectFromPreset('floor-1', 'chair', center, id, {
+    ...defaultObjectAppearance('chair'),
+    width: 0.6,
+    height: 0.6,
+  });
+const desk = deskAt({ x: 1, y: 2 }, 'desk-1');
+const chair = chairAt({ x: 3, y: 2 }, 'chair-1');
 const pcItem = {
   id: 'pc-custom',
   projectId: 'project-1',
@@ -87,7 +104,7 @@ describe('snapObjectPlacement', () => {
   });
 
   it('does not claim equal spacing for objects on different rows', () => {
-    const lowerChair = layoutObjectFromPreset('floor-1', 'chair', { x: 3, y: 2.3 }, 'chair-2');
+    const lowerChair = chairAt({ x: 3, y: 2.3 }, 'chair-2');
     const snap = snapObjectPlacement(
       worldToScreen({ x: 4.6, y: 2.05 }, viewport),
       viewport,
@@ -140,8 +157,8 @@ describe('snapObjectPlacement', () => {
   });
 
   it('aligns the first edge of a new horizontal array beneath an existing row', () => {
-    const first = layoutObjectFromPreset('floor-1', 'desk', { x: 1.35, y: 1.1 }, 'row-1');
-    const second = layoutObjectFromPreset('floor-1', 'desk', { x: 3.35, y: 1.1 }, 'row-2');
+    const first = deskAt({ x: 1.35, y: 1.1 }, 'row-1');
+    const second = deskAt({ x: 3.35, y: 1.1 }, 'row-2');
     const options = { columns: 2, rows: 1, gapX: 0.6, gapY: 0 };
     const snap = snapObjectPlacement(
       worldToScreen({ x: 2.43, y: 2.55 }, viewport),
@@ -164,8 +181,8 @@ describe('snapObjectPlacement', () => {
   });
 
   it('also aligns a single item left edge below a row without changing its height', () => {
-    const first = layoutObjectFromPreset('floor-1', 'desk', { x: 1.35, y: 1.1 }, 'row-1');
-    const second = layoutObjectFromPreset('floor-1', 'desk', { x: 3.35, y: 1.1 }, 'row-2');
+    const first = deskAt({ x: 1.35, y: 1.1 }, 'row-1');
+    const second = deskAt({ x: 3.35, y: 1.1 }, 'row-2');
     const snap = snapObjectPlacement(
       worldToScreen({ x: 1.03, y: 2.55 }, viewport),
       viewport,
@@ -178,7 +195,7 @@ describe('snapObjectPlacement', () => {
   });
 
   it('extends a column with equal spacing when placing one object', () => {
-    const bottom = layoutObjectFromPreset('floor-1', 'desk', { x: 1, y: 4 }, 'desk-2');
+    const bottom = deskAt({ x: 1, y: 4 }, 'desk-2');
     const snap = snapObjectPlacement(
       worldToScreen({ x: 1.03, y: 5.99 }, viewport),
       viewport,

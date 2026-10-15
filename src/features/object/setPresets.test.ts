@@ -30,7 +30,7 @@ describe('custom object sets', () => {
     expect(placed.map((object) => object.groupTemplateId)).toEqual(['my-set', 'my-set']);
     expect(placed[1].y - placed[0].y).toBeCloseTo(originals[1].y - originals[0].y);
     expect(placed[0].floorId).toBe('floor-1');
-    expect(objectSetFootprint(template)).toEqual({ width: 1.4, height: 1.65 });
+    expect(objectSetFootprint(template)).toEqual({ width: 1, height: 1.5 });
     expect(members[0]).not.toHaveProperty('id');
   });
 
