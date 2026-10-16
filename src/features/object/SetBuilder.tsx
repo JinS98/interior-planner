@@ -490,6 +490,7 @@ export function SetBuilder({
         <div className={styles.content}>
           <aside className={styles.itemList} aria-label="세트에 넣을 물품">
             <h3>물품 선택</h3>
+            <p>문·통로는 도면 벽에서 직접 배치합니다.</p>
             {items.map((item) => (
               <button
                 key={item.id}

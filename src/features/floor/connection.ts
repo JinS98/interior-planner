@@ -9,6 +9,80 @@ export function floorConnectionLinks(project: Project, floorId: string) {
   };
 }
 
+/** Promote existing placements of a palette item into floor connections. */
+export function connectExistingPaletteObjects(
+  project: Project,
+  paletteItemId: string,
+  floorsById: Record<string, Floor>,
+  objectsById: Record<string, LayoutObject>,
+): { floorsById: Record<string, Floor>; objectsById: Record<string, LayoutObject> } {
+  const nextFloors = { ...floorsById };
+  const nextObjects = { ...objectsById };
+  const groupsByPlacement = new Map<string, { objects: LayoutObject[]; floorIds: Set<string> }[]>();
+
+  for (const floorId of project.floorIds) {
+    for (const objectId of floorsById[floorId]?.objectIds ?? []) {
+      const object = objectsById[objectId];
+      if (!object || object.type !== paletteItemId || object.floorConnectionId) continue;
+      // Matching manual placements on different floors are one connection.
+      const placement = JSON.stringify([
+        object.x,
+        object.y,
+        object.width,
+        object.height,
+        object.rotation,
+        object.color,
+        object.shape,
+      ]);
+      const groups = groupsByPlacement.get(placement) ?? [];
+      let group = groups.find((candidate) => !candidate.floorIds.has(floorId));
+      if (!group) {
+        group = { objects: [], floorIds: new Set() };
+        groups.push(group);
+        groupsByPlacement.set(placement, groups);
+      }
+      group.objects.push(object);
+      group.floorIds.add(floorId);
+    }
+  }
+
+  if (groupsByPlacement.size === 0) return { floorsById, objectsById };
+
+  for (const groups of groupsByPlacement.values()) {
+    for (const { objects } of groups) {
+      const connectionId = crypto.randomUUID();
+      const source = objects[0];
+      const existingByFloor = new Map(objects.map((object) => [object.floorId, object]));
+      for (const floorId of project.floorIds) {
+        const existing = existingByFloor.get(floorId);
+        if (existing) {
+          nextObjects[existing.id] = {
+            ...existing,
+            floorConnectionId: connectionId,
+            ...floorConnectionLinks(project, floorId),
+          };
+          continue;
+        }
+        // Group membership belongs to the original floor, not the new copy.
+        const duplicate: LayoutObject = {
+          ...source,
+          id: crypto.randomUUID(),
+          floorId,
+          floorConnectionId: connectionId,
+          ...floorConnectionLinks(project, floorId),
+        };
+        delete duplicate.groupId;
+        delete duplicate.groupTemplateId;
+        nextObjects[duplicate.id] = duplicate;
+        const floor = nextFloors[floorId];
+        nextFloors[floorId] = { ...floor, objectIds: [...floor.objectIds, duplicate.id] };
+      }
+    }
+  }
+
+  return { floorsById: nextFloors, objectsById: nextObjects };
+}
+
 /** 연결 물품을 편집할 때 같은 연결에 속한 모든 층의 물품을 포함한다. */
 export function connectedObjects(
   objectsById: Record<string, LayoutObject>,

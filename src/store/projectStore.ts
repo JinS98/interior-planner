@@ -14,6 +14,8 @@ import {
   normalizeSetMembers,
 } from '../features/object/setPresets';
 import { normalizeObjectRotation } from '../features/object/edit';
+import { attachedWallOpening, snapWallOpening } from '../features/object/wallOpening';
+import { createFloorPreviewModel } from '../features/preview3d/model';
 import { rotateGroupObjects } from '../features/object/group';
 import {
   createAutoPlacementPlan,
@@ -25,6 +27,7 @@ import {
 } from '../features/autoPlacement/plan';
 import type { GridPlacementCandidate } from '../features/autoPlacement/gridCandidates';
 import {
+  connectExistingPaletteObjects,
   connectedObjects,
   floorConnectionLinks,
   refreshFloorConnectionLinks,
@@ -91,14 +94,14 @@ export interface ProjectState {
   ) => void;
   createFloor: (
     projectId: string,
-    options?: { sourceFloorId?: string; copyObjects?: boolean },
+    options?: { sourceFloorId?: string; copyRooms?: boolean; copyObjects?: boolean },
   ) => Floor | null;
   renameFloor: (floorId: string, name: string) => boolean;
   deleteFloor: (floorId: string) => boolean;
   addPaletteItem: (
     projectId: string,
     input: Pick<PaletteItem, 'name' | 'category' | 'width' | 'height' | 'color' | 'shape'> &
-      Pick<PaletteItem, 'floorConnector'>,
+      Pick<PaletteItem, 'floorConnector' | 'wallOpening' | 'wallOpeningStyle'>,
   ) => PaletteItem | null;
   addSetTemplate: (
     projectId: string,
@@ -119,6 +122,7 @@ export interface ProjectState {
     centers: Point[],
     appearance: ObjectAppearance,
     options: ObjectArrayOptions,
+    rotation?: number,
   ) => boolean;
   createObjectSetArray: (
     floorId: string,
@@ -226,7 +230,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         let number = 2;
         while (existingNames.has(`${number}f`)) number += 1;
         const floorId = crypto.randomUUID();
-        const rooms = (source?.roomIds ?? [])
+        const rooms = (options?.copyRooms === false ? [] : source?.roomIds ?? [])
           .map((id) => state.roomsById[id])
           .filter((room) => room)
           .map((room) => ({
@@ -433,6 +437,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         if (!item || !project || !project.paletteItemIds.includes(itemId)) return state;
         updated = true;
         if (Boolean(item.floorConnector) === floorConnector) return state;
+        const connected = floorConnector
+          ? connectExistingPaletteObjects(project, itemId, state.floorsById, state.objectsById)
+          : null;
         return {
           projectsById: {
             ...state.projectsById,
@@ -442,6 +449,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             ...state.paletteItemsById,
             [itemId]: { ...item, floorConnector },
           },
+          ...(connected ? connected : {}),
         };
       });
       return updated;
@@ -485,11 +493,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         gapY: 0,
       });
     },
-    createLayoutObjectArray: (floorId, paletteItemId, centers, appearance, options) => {
+    createLayoutObjectArray: (floorId, paletteItemId, centers, appearance, options, rotation = 0) => {
       if (
         !isValidObjectArray(options) ||
         centers.length !== options.columns * options.rows ||
-        centers.some((center) => !Number.isFinite(center.x) || !Number.isFinite(center.y))
+        centers.some((center) => !Number.isFinite(center.x) || !Number.isFinite(center.y)) ||
+        !Number.isFinite(rotation)
       )
         return false;
       let created = false;
@@ -499,6 +508,16 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         const item = state.paletteItemsById[paletteItemId];
         if (!floor || !project || !item || item.projectId !== project.id) return state;
         if (!isValidObjectAppearance(appearance)) return state;
+        if (item.wallOpening) {
+          if (centers.length !== 1) return state;
+          const rooms = floor.roomIds.map((id) => state.roomsById[id]).filter((room) => room);
+          const walls = createFloorPreviewModel(rooms).walls;
+          const candidate = {
+            ...layoutObjectFromPaletteItem(floorId, item, centers[0], '', appearance),
+            rotation,
+          };
+          if (!attachedWallOpening(candidate, walls)) return state;
+        }
         const objects = centers.flatMap((center) => {
           const connectionId = item.floorConnector ? crypto.randomUUID() : null;
           const targetFloorIds = connectionId ? project.floorIds : [floorId];
@@ -510,6 +529,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
               crypto.randomUUID(),
               appearance,
             ),
+            rotation,
             ...(connectionId
               ? { floorConnectionId: connectionId, ...floorConnectionLinks(project, targetFloorId) }
               : {}),
@@ -590,6 +610,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         const room = state.roomsById[roomId];
         const project = floor && state.projectsById[floor.projectId];
         const item = source.kind === 'item' ? state.paletteItemsById[source.id] : null;
+        if (item?.wallOpening) return state;
         const template = source.kind === 'set'
           ? state.setTemplatesById[source.id]
           : item && isValidObjectAppearance(source.appearance)
@@ -650,8 +671,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           color: patch.color ?? object.color,
           shape: patch.shape ?? object.shape,
         };
-        const x = patch.x ?? object.x;
-        const y = patch.y ?? object.y;
+        const x = patch.x ?? (object.wallOpening && patch.width !== undefined
+          ? object.x + (object.width - patch.width) / 2 : object.x);
+        const y = patch.y ?? (object.wallOpening && patch.height !== undefined
+          ? object.y + (object.height - patch.height) / 2 : object.y);
         const rotation = patch.rotation ?? object.rotation;
         if (
           !isValidObjectAppearance(appearance) ||
@@ -665,8 +688,16 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           ...appearance,
           x,
           y,
-          rotation: snapRightAngle(normalizeObjectRotation(rotation)),
+          rotation: object.wallOpening
+            ? normalizeObjectRotation(rotation)
+            : snapRightAngle(normalizeObjectRotation(rotation)),
         };
+        if (next.wallOpening &&
+            (patch.x !== undefined || patch.y !== undefined || patch.width !== undefined ||
+              patch.height !== undefined || patch.rotation !== undefined)) {
+          const rooms = floor.roomIds.map((id) => state.roomsById[id]).filter((room) => room);
+          if (!attachedWallOpening(next, createFloorPreviewModel(rooms).walls)) return state;
+        }
         updated = true;
         if (
           next.x === object.x &&
@@ -720,6 +751,13 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         const floor = state.floorsById[floorId];
         const project = floor && state.projectsById[floor.projectId];
         if (!floor || !project) return state;
+        if (objects.some((object) => object.wallOpening)) {
+          const rooms = floor.roomIds.map((id) => state.roomsById[id]).filter((room) => room);
+          const walls = createFloorPreviewModel(rooms).walls;
+          if (objects.some((object) => object.wallOpening &&
+              !attachedWallOpening({ ...object, x: object.x + delta.x, y: object.y + delta.y }, walls)))
+            return state;
+        }
         moved = true;
         if (delta.x === 0 && delta.y === 0) return state;
         const objectsById = { ...state.objectsById };
@@ -783,17 +821,38 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         const project = floor && state.projectsById[floor.projectId];
         if (!floor || !project || sourceObjects.some((object) => object.floorId !== floorId))
           return state;
+        const rooms = floor.roomIds.map((id) => state.roomsById[id]).filter((room) => room);
+        const snappedOpenings = new Map<string, { x: number; y: number; rotation: number }>();
+        for (const object of sourceObjects) {
+          if (!object.wallOpening) continue;
+          const target = {
+            x: object.x + object.width / 2 + offset.x,
+            y: object.y + object.height / 2 + offset.y,
+          };
+          const snap = snapWallOpening(
+            { x: target.x * 80, y: target.y * 80 },
+            { x: 0, y: 0, scale: 80 }, rooms, object.width, Infinity,
+          );
+          if (!snap) return state;
+          snappedOpenings.set(object.id, {
+            x: snap.center.x - object.width / 2,
+            y: snap.center.y - object.height / 2,
+            rotation: snap.rotation,
+          });
+        }
         const copiedGroupIds = new Map<string, string>();
         const duplicates = sourceObjects.flatMap((object) => {
           if (object.groupId && !copiedGroupIds.has(object.groupId))
             copiedGroupIds.set(object.groupId, crypto.randomUUID());
           const connectionId = object.floorConnectionId ? crypto.randomUUID() : null;
+          const opening = snappedOpenings.get(object.id);
           return (connectionId ? project.floorIds : [floorId]).map((targetFloorId) => ({
             ...object,
             id: crypto.randomUUID(),
             floorId: targetFloorId,
-            x: object.x + offset.x,
-            y: object.y + offset.y,
+            x: opening?.x ?? object.x + offset.x,
+            y: opening?.y ?? object.y + offset.y,
+            rotation: opening?.rotation ?? object.rotation,
             locked: false,
             ...(object.groupId ? { groupId: copiedGroupIds.get(object.groupId) } : {}),
             ...(connectionId

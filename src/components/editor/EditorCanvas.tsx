@@ -54,6 +54,7 @@ import {
   isNearObjectRotationHandle,
 } from '../../features/object/hitTest';
 import { snapObjectPlacement } from '../../features/object/snap';
+import { snapWallOpening } from '../../features/object/wallOpening';
 import { snapObjectMove, type ObjectMoveSnap } from '../../features/object/moveSnap';
 import { objectsInSelectionRect, selectionRectBetween } from '../../features/object/selection';
 import { redoEditorCommand, undoEditorCommand } from '../../features/history/actions';
@@ -163,10 +164,12 @@ const LayoutObjectLayer = memo(function LayoutObjectLayer({
   objects,
   viewport,
   floorsById,
+  rooms,
 }: {
   objects: LayoutObject[];
   viewport: Viewport;
   floorsById: Record<string, Floor>;
+  rooms: Room[];
 }) {
   return objects.map((object) => (
     <LayoutObjectShape
@@ -174,6 +177,7 @@ const LayoutObjectLayer = memo(function LayoutObjectLayer({
       object={object}
       viewport={viewport}
       connectionLabel={floorConnectionLabel(object, floorsById)}
+      rooms={rooms}
     />
   ));
 });
@@ -489,8 +493,15 @@ export function EditorCanvas({
   const placementFootprint = selectedObjectSet
     ? objectArrayFootprint(objectSetFootprint(selectedObjectSet), objectArray)
     : objectArrayFootprint(objectPlacement, objectArray);
+  const placingWallOpening = Boolean(selectedPaletteItem?.wallOpening);
+  const wallOpeningSnap =
+    tool === 'object' && placingWallOpening && !autoPlacementPreview && !spacePressed &&
+    !dragging && hoverPoint !== null
+      ? snapWallOpening(hoverPoint, viewport, rooms, objectPlacement.width)
+      : null;
   const placementSnap =
     tool === 'object' &&
+    !placingWallOpening &&
     !autoPlacementPreview &&
     (selectedPaletteItem || selectedObjectSet) &&
     !spacePressed &&
@@ -498,7 +509,7 @@ export function EditorCanvas({
     hoverPoint !== null
       ? snapObjectPlacement(hoverPoint, viewport, objects, placementFootprint, rooms)
       : null;
-  const placementCenter = placementSnap?.center ?? null;
+  const placementCenter = wallOpeningSnap?.center ?? placementSnap?.center ?? null;
   const placementScreen = placementCenter ? worldToScreen(placementCenter, viewport) : null;
   let setPreviewIndex = 0;
   const objectPreviews =
@@ -516,15 +527,16 @@ export function EditorCanvas({
           ),
         )
       : placementCenter && selectedPaletteItem
-        ? objectArrayCenters(placementCenter, objectPlacement, objectArray).map((center, index) =>
-            layoutObjectFromPaletteItem(
+        ? objectArrayCenters(placementCenter, objectPlacement, objectArray).map((center, index) => ({
+            ...layoutObjectFromPaletteItem(
               activeFloorId ?? '',
               selectedPaletteItem,
               center,
               `preview-${index}`,
               objectPlacement,
             ),
-          )
+            rotation: wallOpeningSnap?.rotation ?? 0,
+          }))
         : [];
   const placementSnapHint = placementSnap?.roomBoundary
     ? '공간 경계에 맞춤'
@@ -541,11 +553,15 @@ export function EditorCanvas({
               : placementSnap?.grid
                 ? '격자에 맞춤'
                 : '클릭하여 배치';
-  const placementHint = selectedObjectSet
-    ? `${selectedObjectSet.name} · ${placementSnapHint}`
-    : objectArray.columns * objectArray.rows > 1
-      ? `${objectArray.columns * objectArray.rows}개 · ${placementSnapHint}`
-      : placementSnapHint;
+  const placementHint = placingWallOpening
+    ? wallOpeningSnap
+      ? `${wallOpeningSnap.snapKind === 'vertex' ? '꼭짓점에 맞춤' : wallOpeningSnap.snapKind === 'grid' ? '격자에 맞춤' : '벽에 맞춤'} · 클릭하여 출입구 배치`
+      : '벽 가까이 이동하여 출입구 배치'
+    : selectedObjectSet
+      ? `${selectedObjectSet.name} · ${placementSnapHint}`
+      : objectArray.columns * objectArray.rows > 1
+        ? `${objectArray.columns * objectArray.rows}개 · ${placementSnapHint}`
+        : placementSnapHint;
 
   function localPoint(event: {
     clientX: number;
@@ -628,6 +644,7 @@ export function EditorCanvas({
         !event.shiftKey &&
         selectedObject &&
         !selectedObject.locked &&
+        !selectedObject.wallOpening &&
         isNearObjectRotationHandle(
           selectedObject,
           point,
@@ -648,6 +665,7 @@ export function EditorCanvas({
         !event.shiftKey &&
         selectedObject &&
         !selectedObject.locked &&
+        !selectedObject.wallOpening &&
         isNearObjectResizeHandle(
           selectedObject,
           point,
@@ -816,6 +834,28 @@ export function EditorCanvas({
           x: (point.x - currentObjectMove.startPoint.x) / currentObjectMove.viewport.scale,
           y: (point.y - currentObjectMove.startPoint.y) / currentObjectMove.viewport.scale,
         };
+        const opening = currentObjectMove.originals.length === 1 && currentObjectMove.originals[0].wallOpening
+          ? currentObjectMove.originals[0] : null;
+        if (opening) {
+          const rawCenter = {
+            x: opening.x + opening.width / 2 + rawDelta.x,
+            y: opening.y + opening.height / 2 + rawDelta.y,
+          };
+          const snap = snapWallOpening(
+            worldToScreen(rawCenter, currentObjectMove.viewport),
+            currentObjectMove.viewport, rooms, opening.width, Infinity,
+          );
+          setObjectMovePreview({
+            [opening.id]: snap ? {
+              ...opening,
+              x: snap.center.x - opening.width / 2,
+              y: snap.center.y - opening.height / 2,
+              rotation: snap.rotation,
+            } : opening,
+          });
+          setMoveSnap(null);
+          return;
+        }
         const snapped = snapObjectMove(
           currentObjectMove.originals,
           currentObjectMove.primaryId,
@@ -889,11 +929,13 @@ export function EditorCanvas({
         tool === 'select' &&
         selectedObject !== undefined &&
         !selectedObject.locked &&
+        !selectedObject.wallOpening &&
         isNearObjectResizeHandle(selectedObject, point, viewport);
       const nearRotateHandle =
         tool === 'select' &&
         selectedObject !== undefined &&
         !selectedObject.locked &&
+        !selectedObject.wallOpening &&
         isNearObjectRotationHandle(selectedObject, point, viewport);
       const nearRoomRotateHandle =
         tool === 'select' &&
@@ -986,6 +1028,23 @@ export function EditorCanvas({
       setMoveSnap(null);
       const point = localPoint(event);
       if (Math.hypot(point.x - edit.startPoint.x, point.y - edit.startPoint.y) > 4) {
+        const opening = edit.originals.length === 1 && edit.originals[0].wallOpening
+          ? edit.originals[0] : null;
+        if (opening) {
+          const rawCenter = {
+            x: opening.x + opening.width / 2 + (point.x - edit.startPoint.x) / edit.viewport.scale,
+            y: opening.y + opening.height / 2 + (point.y - edit.startPoint.y) / edit.viewport.scale,
+          };
+          const snap = snapWallOpening(
+            worldToScreen(rawCenter, edit.viewport), edit.viewport, rooms, opening.width, Infinity,
+          );
+          if (snap) updateLayoutObject(opening.id, {
+            x: snap.center.x - opening.width / 2,
+            y: snap.center.y - opening.height / 2,
+            rotation: snap.rotation,
+          });
+          return;
+        }
         const snapped = snapObjectMove(
           edit.originals,
           edit.primaryId,
@@ -1071,6 +1130,23 @@ export function EditorCanvas({
     if (tool === 'object') {
       if (autoPlacementPreview) return;
       if (!selectedObjectSet && (!selectedPaletteItemId || !selectedPaletteItem)) return;
+      if (selectedPaletteItem?.wallOpening) {
+        const snap = snapWallOpening(point, viewport, rooms, objectPlacement.width);
+        if (!snap || !activeFloorId) {
+          setRoomError('출입구를 놓을 수 있는 벽 가까이를 클릭해 주세요.');
+          return;
+        }
+        const placed = createLayoutObjectArray(
+          activeFloorId,
+          selectedPaletteItem.id,
+          [snap.center],
+          objectPlacement,
+          { columns: 1, rows: 1, gapX: 0, gapY: 0 },
+          snap.rotation,
+        );
+        setRoomError(placed ? null : '출입구를 배치할 수 없습니다.');
+        return;
+      }
       const center = snapObjectPlacement(
         point,
         viewport,
@@ -1421,6 +1497,7 @@ export function EditorCanvas({
                   objects={overlayObjects}
                   viewport={objectViewport}
                   floorsById={floorsById}
+                  rooms={overlayRooms}
                 />
               </g>
             </g>
@@ -1430,12 +1507,13 @@ export function EditorCanvas({
               objects={displayedObjects}
               viewport={objectViewport}
               floorsById={floorsById}
+              rooms={displayedRooms}
             />
           </g>
           {tool === 'object' &&
             autoPlacementPreview?.floorId === activeFloorId &&
             autoPlacementPreview.objects.map((object) => (
-              <LayoutObjectShape key={object.id} object={object} viewport={viewport} preview />
+              <LayoutObjectShape key={object.id} object={object} viewport={viewport} preview rooms={displayedRooms} />
             ))}
           {tool === 'select' &&
             selectedObjectIds.length > 1 &&
@@ -1513,7 +1591,7 @@ export function EditorCanvas({
                 width={selectedObject.width * viewport.scale}
                 height={selectedObject.height * viewport.scale}
               />
-              {!selectedObject.locked && (
+              {!selectedObject.locked && !selectedObject.wallOpening && (
                 <>
                   <rect
                     className={styles.objectResizeHandle}
@@ -1619,7 +1697,7 @@ export function EditorCanvas({
             </g>
           )}
           {objectPreviews.map((object) => (
-            <LayoutObjectShape key={object.id} object={object} viewport={viewport} preview />
+            <LayoutObjectShape key={object.id} object={object} viewport={viewport} preview rooms={displayedRooms} />
           ))}
           {tool === 'select' && selectedRoom && selectedRoomRotationHandle && (
             <g>

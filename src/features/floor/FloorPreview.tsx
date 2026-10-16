@@ -1,10 +1,12 @@
 import { useProjectStore } from '../../store/projectStore';
-import type { Floor, LayoutObject } from '../../types/layout';
+import type { Floor, LayoutObject, Room } from '../../types/layout';
+import { doorSwingSide } from '../object/wallOpening';
 import { floorConnectionLabel } from './connection';
 import { floorContentBounds } from './viewport';
 import styles from './FloorBoard.module.scss';
+import { DoorSymbol } from '../../components/editor/DoorSymbol';
 
-function PreviewObject({ object, label }: { object: LayoutObject; label: string | null }) {
+function PreviewObject({ object, label, rooms }: { object: LayoutObject; label: string | null; rooms: Room[] }) {
   const centerX = object.x + object.width / 2;
   const centerY = object.y + object.height / 2;
   return (
@@ -19,13 +21,18 @@ function PreviewObject({ object, label }: { object: LayoutObject; label: string 
             {object.name} · {label}
           </title>
         )}
-        {object.shape === 'rectangle' && (
+        {object.wallOpening && (
+          <g transform={`translate(${object.x} ${object.y})`}>
+            <DoorSymbol width={object.width} height={object.height} strokeWidth={0.025} style={object.wallOpeningStyle} swingSide={doorSwingSide(object, rooms)} />
+          </g>
+        )}
+        {!object.wallOpening && object.shape === 'rectangle' && (
           <rect x={object.x} y={object.y} width={object.width} height={object.height} rx={0.08} />
         )}
-        {object.shape === 'circle' && (
+        {!object.wallOpening && object.shape === 'circle' && (
           <ellipse cx={centerX} cy={centerY} rx={object.width / 2} ry={object.height / 2} />
         )}
-        {object.shape === 'triangle' && (
+        {!object.wallOpening && object.shape === 'triangle' && (
           <polygon
             points={`${centerX},${object.y} ${object.x + object.width},${object.y + object.height} ${object.x},${object.y + object.height}`}
           />
@@ -45,7 +52,15 @@ function PreviewObject({ object, label }: { object: LayoutObject; label: string 
   );
 }
 
-export function FloorPreview({ floor, onSelect }: { floor: Floor; onSelect: () => void }) {
+export function FloorPreview({
+  floor,
+  onSelect,
+  viewMode = '2d',
+}: {
+  floor: Floor;
+  onSelect: () => void;
+  viewMode?: '2d' | '3d';
+}) {
   const roomsById = useProjectStore((state) => state.roomsById);
   const objectsById = useProjectStore((state) => state.objectsById);
   const floorsById = useProjectStore((state) => state.floorsById);
@@ -67,7 +82,7 @@ export function FloorPreview({ floor, onSelect }: { floor: Floor; onSelect: () =
       type="button"
       className={styles.preview}
       onClick={onSelect}
-      aria-label={`${floor.name} 도면을 선택해 편집`}
+      aria-label={`${floor.name} 도면을 선택해 ${viewMode === '3d' ? '3D로 보기' : '편집'}`}
     >
       <svg
         viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
@@ -99,11 +114,14 @@ export function FloorPreview({ floor, onSelect }: { floor: Floor; onSelect: () =
             key={object.id}
             object={object}
             label={floorConnectionLabel(object, floorsById)}
+            rooms={rooms}
           />
         ))}
       </svg>
       {rooms.length === 0 && objects.length === 0 && <span className={styles.empty}>빈 도면</span>}
-      <span className={styles.previewHint}>클릭해 편집</span>
+      <span className={styles.previewHint}>
+        {viewMode === '3d' ? '클릭해 3D 보기' : '클릭해 편집'}
+      </span>
     </button>
   );
 }

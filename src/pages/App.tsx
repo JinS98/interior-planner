@@ -238,11 +238,15 @@ function ObjectAppearanceControls({
   idPrefix,
   onChange,
   deferColorCommit = false,
+  showShape = true,
+  secondarySizeLabel = '세로',
 }: {
   appearance: ObjectAppearance;
   idPrefix: string;
   onChange: (patch: Partial<ObjectAppearance>) => void;
   deferColorCommit?: boolean;
+  showShape?: boolean;
+  secondarySizeLabel?: string;
 }) {
   const [customColorDraft, setCustomColorDraft] = useState<string | null>(null);
   return (
@@ -256,25 +260,29 @@ function ObjectAppearanceControls({
         />
         <ObjectSizeInput
           id={`${idPrefix}-height`}
-          label="세로"
+          label={secondarySizeLabel}
           value={appearance.height}
           onCommit={(height) => onChange({ height })}
         />
       </div>
-      <span className={styles.objectFieldLabel}>모양</span>
-      <div className={styles.objectShapeOptions} role="group" aria-label="가구 모양">
-        {OBJECT_SHAPES.map(({ id, label }) => (
-          <button
-            key={id}
-            type="button"
-            aria-pressed={appearance.shape === id}
-            onClick={() => onChange({ shape: id })}
-          >
-            <span aria-hidden="true">{id === 'rectangle' ? '▭' : id === 'circle' ? '●' : '▲'}</span>
-            {label}
-          </button>
-        ))}
-      </div>
+      {showShape && (
+        <>
+          <span className={styles.objectFieldLabel}>모양</span>
+          <div className={styles.objectShapeOptions} role="group" aria-label="가구 모양">
+            {OBJECT_SHAPES.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={appearance.shape === id}
+                onClick={() => onChange({ shape: id })}
+              >
+                <span aria-hidden="true">{id === 'rectangle' ? '▭' : id === 'circle' ? '●' : '▲'}</span>
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       <span className={styles.objectFieldLabel}>색상</span>
       <div className={styles.objectColorOptions} role="group" aria-label="가구 색상">
         {COLOR_SWATCHES.map((color) => (
@@ -481,6 +489,8 @@ export function App() {
   const [newItemName, setNewItemName] = useState('');
   const [paletteQuery, setPaletteQuery] = useState('');
   const [newItemFloorConnector, setNewItemFloorConnector] = useState(false);
+  const [newItemWallOpening, setNewItemWallOpening] = useState(false);
+  const [newItemOpeningStyle, setNewItemOpeningStyle] = useState<'door' | 'passage'>('door');
   const [objectArray, setObjectArray] = useState<ObjectArrayOptions>(DEFAULT_OBJECT_ARRAY);
   const [placementMode, setPlacementMode] = useState<'single' | 'array'>('single');
   const [autoPlacementPreview, setAutoPlacementPreview] = useState<AutoPlacementPreview | null>(
@@ -619,7 +629,8 @@ export function App() {
           )),
     0,
   );
-  const activeObjectArray = placementMode === 'single' ? DEFAULT_OBJECT_ARRAY : objectArray;
+  const activeObjectArray = placementMode === 'single' || selectedPaletteItem?.wallOpening
+    ? DEFAULT_OBJECT_ARRAY : objectArray;
 
   function selectPlacementMode(mode: 'single' | 'array') {
     if (mode === 'array' && objectArray.columns * objectArray.rows === 1) {
@@ -644,7 +655,7 @@ export function App() {
         <SetBuilder
           items={(project.paletteItemIds ?? [])
             .map((id) => paletteItemsById[id])
-            .filter((item) => item != null)}
+            .filter((item) => item != null && !item.wallOpening)}
           onClose={() => setSetBuilderOpen(false)}
           onSave={(name, objects) => {
             const template = addSetTemplate(project.id, name, objects);
@@ -865,12 +876,15 @@ export function App() {
                             style={{ color: item.color, backgroundColor: `${item.color}26` }}
                             aria-hidden="true"
                           >
-                            {item.shape === 'rectangle' ? '▭' : item.shape === 'circle' ? '●' : '▲'}
+                            {item.wallOpening ? '🚪' : item.shape === 'rectangle' ? '▭' : item.shape === 'circle' ? '●' : '▲'}
                           </span>
                           <span className={styles.presetDetails}>
                             <span className={styles.presetName}>{item.name}</span>
                             {item.floorConnector && (
                               <span className={styles.connectorBadge}>층 연결</span>
+                            )}
+                            {item.wallOpening && (
+                              <span className={styles.connectorBadge}>벽 출입구</span>
                             )}
                           </span>
                           <span className={styles.presetSize}>
@@ -896,7 +910,10 @@ export function App() {
                         name: newItemName,
                         category: newItemCategory,
                         floorConnector: newItemFloorConnector,
+                        wallOpening: newItemWallOpening,
+                        wallOpeningStyle: newItemWallOpening ? newItemOpeningStyle : undefined,
                         ...newItemAppearance,
+                        ...(newItemWallOpening ? { shape: 'rectangle' as const } : {}),
                       });
                       if (!item) return;
                       setPaletteItem(item);
@@ -904,6 +921,8 @@ export function App() {
                       setNewItemName('');
                       setNewItemCategory('furniture');
                       setNewItemFloorConnector(false);
+                      setNewItemWallOpening(false);
+                      setNewItemOpeningStyle('door');
                       setNewItemAppearance(NEW_PALETTE_APPEARANCE);
                       setPaletteQuery('');
                     }}
@@ -944,9 +963,41 @@ export function App() {
                     <p className={styles.connectorHelp}>
                       계단·엘리베이터처럼 모든 층의 같은 위치에 표시하고 함께 편집합니다.
                     </p>
+                    <label className={styles.connectorOption}>
+                      <input
+                        type="checkbox"
+                        checked={newItemWallOpening}
+                        onChange={(event) => {
+                          setNewItemWallOpening(event.target.checked);
+                          if (event.target.checked)
+                            setNewItemAppearance((current) => ({
+                              ...current, shape: 'rectangle',
+                              height: current.height === 1 ? 0.14 : current.height,
+                            }));
+                        }}
+                      />
+                      벽 출입구
+                    </label>
+                    <p className={styles.connectorHelp}>
+                      벽에 한 개씩 붙여 놓습니다. 3D에서는 해당 위치에 출입구가 생깁니다.
+                    </p>
+                    {newItemWallOpening && (
+                      <label className={styles.paletteCreateField}>
+                        출입구 표현
+                        <select
+                          value={newItemOpeningStyle}
+                          onChange={(event) => setNewItemOpeningStyle(event.target.value as 'door' | 'passage')}
+                        >
+                          <option value="door">문짝 있는 문</option>
+                          <option value="passage">문짝 없는 통로</option>
+                        </select>
+                      </label>
+                    )}
                     <ObjectAppearanceControls
                       appearance={newItemAppearance}
                       idPrefix="new-palette-item"
+                      showShape={!newItemWallOpening}
+                      secondarySizeLabel={newItemWallOpening ? '벽 두께' : '세로'}
                       onChange={(patch) =>
                         setNewItemAppearance((current) => ({ ...current, ...patch }))
                       }
@@ -987,11 +1038,16 @@ export function App() {
                           층 연결 물품
                         </label>
                         <p className={styles.connectorSettingHelp}>
-                          켜면 새로 배치하는 물품이 모든 층의 같은 위치에 나타납니다.
+                          켜면 이미 놓은 같은 물품과 새로 배치하는 물품이 모든 층의 같은 위치에
+                          나타납니다. 끄더라도 이미 연결된 물품은 유지됩니다.
                         </p>
                       </>
                     )}
-                    <div className={styles.arraySettings}>
+                    {selectedPaletteItem?.wallOpening && (
+                      <p>벽 가까이 가져가면 위치가 맞춰집니다. 외벽 문은 바깥으로, 방 사이 문은 작은 방 쪽으로 열립니다. 출입구는 한 개씩 배치합니다.</p>
+                    )}
+                    {!selectedPaletteItem?.wallOpening && (
+                      <div className={styles.arraySettings}>
                       <span className={styles.objectFieldLabel}>배치 방식</span>
                       <div
                         className={styles.placementMode}
@@ -1060,12 +1116,15 @@ export function App() {
                       <p>
                         기존 물품과 가까워지면 정렬·같은 간격·아랫줄 시작선에 자동으로 맞춰집니다.
                       </p>
-                    </div>
+                      </div>
+                    )}
                     <details className={styles.placementDetails}>
                       <summary>크기·모양·색상 조정</summary>
                       <ObjectAppearanceControls
                         appearance={objectPlacement}
                         idPrefix="placement"
+                        showShape={!selectedPaletteItem?.wallOpening}
+                        secondarySizeLabel={selectedPaletteItem?.wallOpening ? '벽 두께' : '세로'}
                         onChange={setObjectPlacement}
                       />
                     </details>
@@ -1370,14 +1429,19 @@ export function App() {
                     key={selectedObject.id}
                     appearance={selectedObject}
                     idPrefix="selected-object"
+                    showShape={!selectedObject.wallOpening}
+                    secondarySizeLabel={selectedObject.wallOpening ? '벽 두께' : '세로'}
                     deferColorCommit
                     onChange={(patch) => updateLayoutObject(selectedObject.id, patch)}
                   />
-                  <ObjectRotationInput
+                  {selectedObject.wallOpening && (
+                    <p>출입구는 벽을 따라 이동합니다. 방향은 벽과 방 구조에 맞춰집니다.</p>
+                  )}
+                  {!selectedObject.wallOpening && <ObjectRotationInput
                     key={`${selectedObject.id}-rotation`}
                     rotation={selectedObject.rotation}
                     onCommit={(rotation) => updateLayoutObject(selectedObject.id, { rotation })}
-                  />
+                  />}
                 </fieldset>
               </div>
             </InspectorSection>

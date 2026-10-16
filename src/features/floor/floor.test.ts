@@ -18,6 +18,24 @@ beforeEach(() => {
 });
 
 describe('floor management', () => {
+  it('can start a floor without copying the divided room structure while copying objects', () => {
+    const store = useProjectStore.getState();
+    expect(store.createRoom(LOCAL_FLOOR_ID, square)).toBe(true);
+    expect(store.createRoom(LOCAL_FLOOR_ID, square.map(({ x, y }) => ({ x: x + 2, y })))).toBe(true);
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 1, y: 1 })).toBe(true);
+    const second = store.createFloor(LOCAL_PROJECT_ID, {
+      sourceFloorId: LOCAL_FLOOR_ID,
+      copyRooms: false,
+      copyObjects: true,
+    })!;
+    expect(second.roomIds).toEqual([]);
+    expect(second.objectIds).toHaveLength(1);
+    expect(useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].roomIds).toHaveLength(2);
+    expect(store.createRoom(second.id, square)).toBe(true);
+    expect(useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].roomIds).toHaveLength(2);
+    expect(useProjectStore.getState().floorsById[second.id].roomIds).toHaveLength(1);
+  });
+
   it('copies room geometry to a new floor without furniture by default', () => {
     const store = useProjectStore.getState();
     expect(store.createRoom(LOCAL_FLOOR_ID, square)).toBe(true);
@@ -257,27 +275,96 @@ describe('floor connection objects', () => {
     expect(ids.every((id) => useProjectStore.getState().objectsById[id] === undefined)).toBe(true);
   });
 
-  it('applies the palette connection toggle to future placements only', () => {
+  it('connects already placed items on every floor in one undoable toggle', () => {
     const store = useProjectStore.getState();
     const second = store.createFloor(LOCAL_PROJECT_ID)!;
     expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 2, y: 2 })).toBe(true);
     const originalId = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds[0];
 
+    const historyCount = useProjectStore.getState().historyPast.length;
     expect(store.setPaletteItemFloorConnector('desk', true)).toBe(true);
-    expect(store.createLayoutObject(second.id, 'desk', { x: 4, y: 4 })).toBe(true);
     let state = useProjectStore.getState();
+    expect(state.historyPast).toHaveLength(historyCount + 1);
+    const copyId = state.floorsById[second.id].objectIds[0];
+    expect(state.objectsById[originalId]).toMatchObject({
+      x: 1.5,
+      y: 1.7,
+      fromFloorId: null,
+      toFloorId: second.id,
+    });
+    expect(state.objectsById[copyId]).toMatchObject({
+      x: 1.5,
+      y: 1.7,
+      fromFloorId: LOCAL_FLOOR_ID,
+      toFloorId: null,
+    });
+    expect(state.objectsById[originalId].floorConnectionId).toBe(
+      state.objectsById[copyId].floorConnectionId,
+    );
+
+    expect(undoEditorCommand()).toBe(true);
+    state = useProjectStore.getState();
+    expect(Boolean(state.paletteItemsById.desk.floorConnector)).toBe(false);
     expect(state.objectsById[originalId].floorConnectionId).toBeUndefined();
+    expect(state.floorsById[second.id].objectIds).toHaveLength(0);
+    expect(redoEditorCommand()).toBe(true);
+    expect(useProjectStore.getState().objectsById[copyId].floorConnectionId).toBe(
+      useProjectStore.getState().objectsById[originalId].floorConnectionId,
+    );
+
+    expect(store.createLayoutObject(second.id, 'desk', { x: 4, y: 4 })).toBe(true);
+    state = useProjectStore.getState();
     const linked = Object.values(state.objectsById).filter((object) => object.floorConnectionId);
-    expect(linked).toHaveLength(2);
-    expect(linked[0].floorConnectionId).toBe(linked[1].floorConnectionId);
+    expect(linked).toHaveLength(4);
+    expect(new Set(linked.map((object) => object.floorConnectionId)).size).toBe(2);
 
     expect(store.setPaletteItemFloorConnector('desk', false)).toBe(true);
     expect(store.createLayoutObject(second.id, 'desk', { x: 6, y: 6 })).toBe(true);
     state = useProjectStore.getState();
     expect(
       Object.values(state.objectsById).filter((object) => object.floorConnectionId),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
     expect(state.floorsById[LOCAL_FLOOR_ID].objectIds).toHaveLength(2);
-    expect(state.floorsById[second.id].objectIds).toHaveLength(2);
+    expect(state.floorsById[second.id].objectIds).toHaveLength(3);
+  });
+
+  it('reuses matching manual placements across floors when connection is enabled', () => {
+    const store = useProjectStore.getState();
+    const second = store.createFloor(LOCAL_PROJECT_ID)!;
+    const third = store.createFloor(LOCAL_PROJECT_ID)!;
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 3, y: 4 })).toBe(true);
+    expect(store.createLayoutObject(second.id, 'desk', { x: 3, y: 4 })).toBe(true);
+    const before = useProjectStore.getState();
+    const firstId = before.floorsById[LOCAL_FLOOR_ID].objectIds[0];
+    const secondId = before.floorsById[second.id].objectIds[0];
+
+    expect(store.setPaletteItemFloorConnector('desk', true)).toBe(true);
+    const state = useProjectStore.getState();
+    const thirdId = state.floorsById[third.id].objectIds[0];
+    expect(state.floorsById[LOCAL_FLOOR_ID].objectIds).toEqual([firstId]);
+    expect(state.floorsById[second.id].objectIds).toEqual([secondId]);
+    expect(state.floorsById[third.id].objectIds).toHaveLength(1);
+    expect(
+      new Set([firstId, secondId, thirdId].map((id) => state.objectsById[id].floorConnectionId))
+        .size,
+    ).toBe(1);
+    expect(state.objectsById[thirdId]).toMatchObject({ x: 2.5, y: 3.7 });
+  });
+
+  it('carries a retroactively connected item into floors added later', () => {
+    const store = useProjectStore.getState();
+    expect(store.createLayoutObject(LOCAL_FLOOR_ID, 'desk', { x: 3, y: 4 })).toBe(true);
+    expect(store.setPaletteItemFloorConnector('desk', true)).toBe(true);
+    const firstId = useProjectStore.getState().floorsById[LOCAL_FLOOR_ID].objectIds[0];
+
+    const second = store.createFloor(LOCAL_PROJECT_ID, {
+      sourceFloorId: LOCAL_FLOOR_ID,
+      copyObjects: true,
+    })!;
+    const state = useProjectStore.getState();
+    expect(state.floorsById[second.id].objectIds).toHaveLength(1);
+    const secondObject = state.objectsById[state.floorsById[second.id].objectIds[0]];
+    expect(secondObject.floorConnectionId).toBe(state.objectsById[firstId].floorConnectionId);
+    expect(secondObject).toMatchObject({ x: 2.5, y: 3.7, fromFloorId: LOCAL_FLOOR_ID });
   });
 });

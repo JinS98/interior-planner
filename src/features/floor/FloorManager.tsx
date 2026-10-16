@@ -18,6 +18,7 @@ export function FloorManager({ onFloorCreated }: { onFloorCreated?: () => void }
   const [deletingFloorId, setDeletingFloorId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copyObjects, setCopyObjects] = useState(false);
+  const [copyRooms, setCopyRooms] = useState(true);
   const floors = (project?.floorIds ?? []).map((id) => floorsById[id]).filter((floor) => floor);
   const editingFloor = editingFloorId ? floorsById[editingFloorId] : null;
   const deletingFloor = deletingFloorId ? floorsById[deletingFloorId] : null;
@@ -60,6 +61,14 @@ export function FloorManager({ onFloorCreated }: { onFloorCreated?: () => void }
       <label className={styles.copyOption}>
         <input
           type="checkbox"
+          checked={copyRooms}
+          onChange={(event) => setCopyRooms(event.target.checked)}
+        />
+        공간 구조·분할 복제
+      </label>
+      <label className={styles.copyOption}>
+        <input
+          type="checkbox"
           checked={copyObjects}
           onChange={(event) => setCopyObjects(event.target.checked)}
         />
@@ -76,6 +85,7 @@ export function FloorManager({ onFloorCreated }: { onFloorCreated?: () => void }
           if (!project) return;
           const floor = createFloor(project.id, {
             sourceFloorId: activeFloorId ?? undefined,
+            copyRooms,
             copyObjects,
           });
           if (floor) {

@@ -25,6 +25,17 @@ export const OBJECT_PRESETS = [
     color: '#82A7DE',
     shape: 'circle',
   },
+  {
+    id: 'door',
+    name: '출입구(문)',
+    category: 'facility',
+    width: 0.9,
+    height: 0.14,
+    color: '#A9794E',
+    shape: 'rectangle',
+    wallOpening: true,
+    wallOpeningStyle: 'door',
+  },
 ] as const;
 
 export type ObjectPresetId = (typeof OBJECT_PRESETS)[number]['id'];
@@ -106,5 +117,7 @@ export function layoutObjectFromPaletteItem(
     shape: appearance.shape,
     rotation: 0,
     locked: false,
+    ...(item.wallOpening ? { wallOpening: true } : {}),
+    ...(item.wallOpening ? { wallOpeningStyle: item.wallOpeningStyle ?? 'door' } : {}),
   };
 }

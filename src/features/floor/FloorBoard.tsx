@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { AreaUnit } from '../../domain/geometry/area';
 import { EditorCanvas } from '../../components/editor/EditorCanvas';
 import { useEditorStore } from '../../store/editorStore';
@@ -9,6 +9,8 @@ import { centeredFloorViewport, floorContentBounds } from './viewport';
 import type { ObjectArrayOptions } from '../object/array';
 import type { AutoPlacementPreview } from '../autoPlacement/AutoPlacementPanel';
 import styles from './FloorBoard.module.scss';
+
+const ThreeFloorPreview = lazy(() => import('../preview3d/ThreeFloorPreview'));
 
 export function FloorBoard({
   areaUnit,
@@ -24,6 +26,8 @@ export function FloorBoard({
   const setActiveFloor = useEditorStore((state) => state.setActiveFloor);
   const project = useProjectStore((state) => state.projectsById[activeProjectId ?? '']);
   const floorsById = useProjectStore((state) => state.floorsById);
+  const roomsById = useProjectStore((state) => state.roomsById);
+  const objectsById = useProjectStore((state) => state.objectsById);
   const floorIds = project?.floorIds;
   const floors = (floorIds ?? []).map((id) => floorsById[id]).filter((floor) => floor);
   const otherFloors = floors.filter((floor) => floor.id !== activeFloorId);
@@ -31,6 +35,17 @@ export function FloorBoard({
   const [maximizedFloorId, setMaximizedFloorId] = useState<string | null>(null);
   const [overlayFloorId, setOverlayFloorId] = useState<string | null>(null);
   const [floorManagerOpen, setFloorManagerOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
+  const activeRoomIds = floorsById[activeFloorId ?? '']?.roomIds;
+  const activeObjectIds = floorsById[activeFloorId ?? '']?.objectIds;
+  const activeRooms = useMemo(
+    () => (activeRoomIds ?? []).map((id) => roomsById[id]).filter((room) => room),
+    [activeRoomIds, roomsById],
+  );
+  const activeObjects = useMemo(
+    () => (activeObjectIds ?? []).map((id) => objectsById[id]).filter((object) => object),
+    [activeObjectIds, objectsById],
+  );
   const visibleOverlayFloorId =
     overlayFloorId && overlayFloorId !== activeFloorId && floorsById[overlayFloorId]
       ? overlayFloorId
@@ -73,10 +88,10 @@ export function FloorBoard({
 
   useLayoutEffect(() => {
     if (previousViewSignature.current === viewSignature) return;
-    previousViewSignature.current = viewSignature;
     const host = activeCanvasHost.current;
     const floor = useProjectStore.getState().floorsById[activeFloorId ?? ''];
     if (!host || !floor) return;
+    previousViewSignature.current = viewSignature;
     const { roomsById, objectsById } = useProjectStore.getState();
     const editor = useEditorStore.getState();
     const viewport = centeredFloorViewport(
@@ -85,7 +100,7 @@ export function FloorBoard({
       editor.viewport.scale,
     );
     if (viewport) editor.setViewport(viewport);
-  }, [activeFloorId, viewSignature]);
+  }, [activeFloorId, viewMode, viewSignature]);
 
   function selectFloor(floorId: string) {
     setHiddenFloorIds((current) => {
@@ -142,32 +157,42 @@ export function FloorBoard({
             + 층 추가·관리
           </button>
         </nav>
-        <div className={styles.overlayControls}>
-          <label className={styles.overlayToggle}>
-            <input
-              type="checkbox"
-              checked={visibleOverlayFloorId !== null}
-              disabled={otherFloors.length === 0}
-              onChange={(event) =>
-                setOverlayFloorId(event.target.checked ? (otherFloors[0]?.id ?? null) : null)
-              }
-            />
-            반투명 겹쳐 보기
-          </label>
-          {visibleOverlayFloorId && (
-            <select
-              aria-label="겹쳐 볼 층"
-              value={visibleOverlayFloorId}
-              onChange={(event) => setOverlayFloorId(event.target.value)}
-            >
-              {otherFloors.map((floor) => (
-                <option key={floor.id} value={floor.id}>
-                  {floor.name}
-                </option>
-              ))}
-            </select>
-          )}
+        <div className={styles.viewToggle} role="group" aria-label="활성 층 보기 방식">
+          <button type="button" aria-pressed={viewMode === '2d'} onClick={() => setViewMode('2d')}>
+            2D 편집
+          </button>
+          <button type="button" aria-pressed={viewMode === '3d'} onClick={() => setViewMode('3d')}>
+            3D 미리보기
+          </button>
         </div>
+        {viewMode === '2d' && (
+          <div className={styles.overlayControls}>
+            <label className={styles.overlayToggle}>
+              <input
+                type="checkbox"
+                checked={visibleOverlayFloorId !== null}
+                disabled={otherFloors.length === 0}
+                onChange={(event) =>
+                  setOverlayFloorId(event.target.checked ? (otherFloors[0]?.id ?? null) : null)
+                }
+              />
+              반투명 겹쳐 보기
+            </label>
+            {visibleOverlayFloorId && (
+              <select
+                aria-label="겹쳐 볼 층"
+                value={visibleOverlayFloorId}
+                onChange={(event) => setOverlayFloorId(event.target.value)}
+              >
+                {otherFloors.map((floor) => (
+                  <option key={floor.id} value={floor.id}>
+                    {floor.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
       </div>
       {floorManagerOpen && (
         <div id="floor-manager-panel" className={styles.floorManagerDrawer}>
@@ -189,12 +214,14 @@ export function FloorBoard({
             <section
               key={floor.id}
               className={`${styles.panel} ${active ? styles.active : ''}`}
-              aria-label={`${floor.name} 도면${active ? ', 편집 중' : ', 미리보기'}`}
+              aria-label={`${floor.name} 도면${active ? (viewMode === '3d' ? ', 3D 미리보기' : ', 편집 중') : ', 미리보기'}`}
             >
               <div className={styles.heading}>
                 <div className={styles.headingTitle}>
                   <strong>{floor.name}</strong>
-                  <span>{active ? '편집 중' : '미리보기'}</span>
+                  <span>
+                    {active ? (viewMode === '3d' ? '3D 미리보기' : '편집 중') : '미리보기'}
+                  </span>
                 </div>
                 <div className={styles.windowActions}>
                   <button
@@ -220,7 +247,11 @@ export function FloorBoard({
                   </button>
                 </div>
               </div>
-              {active ? (
+              {active && viewMode === '3d' ? (
+                <Suspense fallback={<div className={styles.loading}>3D 화면 준비 중…</div>}>
+                  <ThreeFloorPreview key={floor.id} rooms={activeRooms} objects={activeObjects} />
+                </Suspense>
+              ) : active ? (
                 <div className={styles.canvasHost} ref={activeCanvasHost}>
                   <EditorCanvas
                     key={floor.id}
@@ -231,7 +262,11 @@ export function FloorBoard({
                   />
                 </div>
               ) : (
-                <FloorPreview floor={floor} onSelect={() => selectFloor(floor.id)} />
+                <FloorPreview
+                  floor={floor}
+                  onSelect={() => selectFloor(floor.id)}
+                  viewMode={viewMode}
+                />
               )}
             </section>
           );

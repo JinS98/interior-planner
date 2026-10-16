@@ -150,7 +150,9 @@ export function AutoPlacementPanel({
 
   return (
     <div className={styles.panel}>
-      {!source ? (
+      {source?.kind === 'item' && source.item.wallOpening ? (
+        <p>벽 출입구는 도면의 벽 가까이에서 한 개씩 배치해 주세요.</p>
+      ) : !source ? (
         <p>위에서 물품이나 세트를 선택하면 공간에 자동 배치할 수 있습니다.</p>
       ) : rooms.length === 0 ? (
         <p>공간 도구로 방을 먼저 만든 뒤 자동 배치할 수 있습니다.</p>

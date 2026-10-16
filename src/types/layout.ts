@@ -50,6 +50,9 @@ export interface LayoutObject {
   floorConnectionId?: string;
   fromFloorId?: string | null;
   toFloorId?: string | null;
+  /** 벽에 맞춰 놓으면 3D 벽에 출입구를 만드는 물품. */
+  wallOpening?: boolean;
+  wallOpeningStyle?: 'door' | 'passage';
 }
 
 export type ObjectAppearance = Pick<LayoutObject, 'width' | 'height' | 'color' | 'shape'>;
@@ -62,6 +65,8 @@ export interface PaletteItem extends ObjectAppearance {
   category: LayoutObject['category'];
   builtIn: boolean;
   floorConnector?: boolean;
+  wallOpening?: boolean;
+  wallOpeningStyle?: 'door' | 'passage';
 }
 
 /** 세트는 물품의 당시 속성과 상대 위치를 보관해 팔레트 변경과 독립적으로 재사용한다. */

@@ -97,6 +97,36 @@
   }
 }
 
+.viewToggle {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin: 5px 8px;
+  padding: 2px;
+  border: 1px solid #dce2ec;
+  border-radius: 7px;
+  background: #f6f8fc;
+  button {
+    padding: 5px 8px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #63718a;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    white-space: nowrap;
+    &[aria-pressed='true'] {
+      background: #fff;
+      color: #3955bd;
+      box-shadow: 0 1px 3px rgb(25 39 69 / 12%);
+    }
+    &:focus-visible {
+      outline: 2px solid #526fe1;
+    }
+  }
+}
+
 .overlayToggle {
   display: flex;
   align-items: center;
@@ -247,6 +277,14 @@
   display: flex;
   flex: 1;
   min-height: 0;
+}
+
+.loading {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  color: #718099;
+  font-size: 12px;
 }
 
 .preview {
