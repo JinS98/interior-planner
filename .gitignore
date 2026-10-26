@@ -8,3 +8,9 @@ coverage/
 firebase-debug.log
 firestore-debug.log
 .firebase/
+
+# Unused Firebase initialization examples kept locally.
+dataconnect/
+functions/
+src/dataconnect-generated/
+firestore.indexes.json
