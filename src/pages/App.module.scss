@@ -51,12 +51,42 @@
   }
 }
 .primaryButton {
-  background: #e9edf5;
+  background: #526fe1;
   border: 0;
-  color: #91a0b5;
+  color: #fff;
   padding: 10px 14px;
   border-radius: 8px;
-  cursor: not-allowed;
+  cursor: pointer;
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+.cloudActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.cloudActions > button:not(.primaryButton) {
+  padding: 8px;
+  border: 1px solid #dce2ec;
+  border-radius: 8px;
+  background: #fff;
+  color: #52617b;
+  cursor: pointer;
+}
+.cloudActions > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.saveHint {
+  color: #69768d;
+  white-space: nowrap;
+}
+.cloudError {
+  color: #ba3145;
+  max-width: 220px;
 }
 .workspace {
   flex: 1;

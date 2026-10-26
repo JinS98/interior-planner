@@ -41,6 +41,7 @@ import { SetBuilder } from '../features/object/SetBuilder';
 import { MAX_SET_PLACED_OBJECTS } from '../features/object/setPresets';
 import { useEditorStore, type EditorTool } from '../store/editorStore';
 import { useProjectStore } from '../store/projectStore';
+import type { SaveStatus } from '../services/autoSave';
 import type { LayoutObject, ObjectAppearance } from '../types/layout';
 import styles from './App.module.scss';
 
@@ -276,7 +277,9 @@ function ObjectAppearanceControls({
                 aria-pressed={appearance.shape === id}
                 onClick={() => onChange({ shape: id })}
               >
-                <span aria-hidden="true">{id === 'rectangle' ? '▭' : id === 'circle' ? '●' : '▲'}</span>
+                <span aria-hidden="true">
+                  {id === 'rectangle' ? '▭' : id === 'circle' ? '●' : '▲'}
+                </span>
                 {label}
               </button>
             ))}
@@ -482,7 +485,17 @@ function ShortcutHelp() {
   );
 }
 
-export function App() {
+export interface CloudControls {
+  userLabel: string;
+  busy: boolean;
+  saveStatus: SaveStatus;
+  error: string | null;
+  save: () => void;
+  showProjects: () => void;
+  signOut: () => void;
+}
+
+export function App({ cloud }: { cloud: CloudControls }) {
   const [areaUnit, setAreaUnit] = useState<AreaUnit>('sqm');
   const [addingPaletteItem, setAddingPaletteItem] = useState(false);
   const [setBuilderOpen, setSetBuilderOpen] = useState(false);
@@ -629,8 +642,10 @@ export function App() {
           )),
     0,
   );
-  const activeObjectArray = placementMode === 'single' || selectedPaletteItem?.wallOpening
-    ? DEFAULT_OBJECT_ARRAY : objectArray;
+  const activeObjectArray =
+    placementMode === 'single' || selectedPaletteItem?.wallOpening
+      ? DEFAULT_OBJECT_ARRAY
+      : objectArray;
 
   function selectPlacementMode(mode: 'single' | 'array') {
     if (mode === 'array' && objectArray.columns * objectArray.rows === 1) {
@@ -676,15 +691,40 @@ export function App() {
           <span className={styles.badge}>Foundation</span>
         </div>
         <div className={styles.projectName}>
-          {project?.name ?? '프로젝트'} <span>· 로컬 편집 화면</span>
+          {project?.name ?? '프로젝트'} <span>· {cloud.userLabel}</span>
         </div>
-        <button
-          className={styles.primaryButton}
-          disabled
-          title="10일차에 Firebase 저장 기능을 연결합니다"
-        >
-          저장 준비 중
-        </button>
+        <div className={styles.cloudActions}>
+          {cloud.error && (
+            <span className={styles.cloudError} role="alert">
+              {cloud.error}
+            </span>
+          )}
+          <span className={styles.saveHint} role="status">
+            {cloud.saveStatus.phase === 'saved' && '저장됨'}
+            {cloud.saveStatus.phase === 'pending' && '자동 저장 대기 중'}
+            {cloud.saveStatus.phase === 'saving' && '저장 중…'}
+            {cloud.saveStatus.phase === 'error' && '저장 실패'}
+          </span>
+          {cloud.saveStatus.error && (
+            <span className={styles.cloudError} role="alert">
+              {cloud.saveStatus.error}
+            </span>
+          )}
+          <button type="button" onClick={cloud.showProjects} disabled={cloud.busy}>
+            프로젝트 목록
+          </button>
+          <button type="button" onClick={cloud.signOut} disabled={cloud.busy}>
+            로그아웃
+          </button>
+          <button
+            type="button"
+            className={styles.primaryButton}
+            onClick={cloud.save}
+            disabled={cloud.busy || !cloud.saveStatus.dirty}
+          >
+            {cloud.saveStatus.phase === 'error' ? '다시 시도' : '지금 저장'}
+          </button>
+        </div>
       </header>
       <main className={styles.workspace}>
         <aside className={styles.sidebar} aria-label="도구">
@@ -876,7 +916,13 @@ export function App() {
                             style={{ color: item.color, backgroundColor: `${item.color}26` }}
                             aria-hidden="true"
                           >
-                            {item.wallOpening ? '🚪' : item.shape === 'rectangle' ? '▭' : item.shape === 'circle' ? '●' : '▲'}
+                            {item.wallOpening
+                              ? '🚪'
+                              : item.shape === 'rectangle'
+                                ? '▭'
+                                : item.shape === 'circle'
+                                  ? '●'
+                                  : '▲'}
                           </span>
                           <span className={styles.presetDetails}>
                             <span className={styles.presetName}>{item.name}</span>
@@ -971,7 +1017,8 @@ export function App() {
                           setNewItemWallOpening(event.target.checked);
                           if (event.target.checked)
                             setNewItemAppearance((current) => ({
-                              ...current, shape: 'rectangle',
+                              ...current,
+                              shape: 'rectangle',
                               height: current.height === 1 ? 0.14 : current.height,
                             }));
                         }}
@@ -986,7 +1033,9 @@ export function App() {
                         출입구 표현
                         <select
                           value={newItemOpeningStyle}
-                          onChange={(event) => setNewItemOpeningStyle(event.target.value as 'door' | 'passage')}
+                          onChange={(event) =>
+                            setNewItemOpeningStyle(event.target.value as 'door' | 'passage')
+                          }
                         >
                           <option value="door">문짝 있는 문</option>
                           <option value="passage">문짝 없는 통로</option>
@@ -1044,78 +1093,82 @@ export function App() {
                       </>
                     )}
                     {selectedPaletteItem?.wallOpening && (
-                      <p>벽 가까이 가져가면 위치가 맞춰집니다. 외벽 문은 바깥으로, 방 사이 문은 작은 방 쪽으로 열립니다. 출입구는 한 개씩 배치합니다.</p>
+                      <p>
+                        벽 가까이 가져가면 위치가 맞춰집니다. 외벽 문은 바깥으로, 방 사이 문은 작은
+                        방 쪽으로 열립니다. 출입구는 한 개씩 배치합니다.
+                      </p>
                     )}
                     {!selectedPaletteItem?.wallOpening && (
                       <div className={styles.arraySettings}>
-                      <span className={styles.objectFieldLabel}>배치 방식</span>
-                      <div
-                        className={styles.placementMode}
-                        role="group"
-                        aria-label="물품 배치 방식"
-                      >
-                        <button
-                          type="button"
-                          aria-pressed={placementMode === 'single'}
-                          onClick={() => selectPlacementMode('single')}
+                        <span className={styles.objectFieldLabel}>배치 방식</span>
+                        <div
+                          className={styles.placementMode}
+                          role="group"
+                          aria-label="물품 배치 방식"
                         >
-                          한 개씩
-                        </button>
-                        <button
-                          type="button"
-                          aria-pressed={placementMode === 'array'}
-                          onClick={() => selectPlacementMode('array')}
-                        >
-                          여러 개 배열
-                        </button>
-                      </div>
-                      {placementMode === 'array' && (
-                        <>
-                          <div className={styles.arrayFields}>
-                            <ObjectArrayInput
-                              label="가로 개수"
-                              value={objectArray.columns}
-                              min={1}
-                              max={Math.floor(100 / objectArray.rows)}
-                              step={1}
-                              onCommit={(columns) => updateObjectArray({ columns })}
-                            />
-                            <ObjectArrayInput
-                              label="세로 개수"
-                              value={objectArray.rows}
-                              min={1}
-                              max={Math.floor(100 / objectArray.columns)}
-                              step={1}
-                              onCommit={(rows) => updateObjectArray({ rows })}
-                            />
-                            <ObjectArrayInput
-                              label="가로 간격 (m)"
-                              value={objectArray.gapX}
-                              min={0}
-                              max={20}
-                              step={0.1}
-                              onCommit={(gapX) => updateObjectArray({ gapX })}
-                            />
-                            <ObjectArrayInput
-                              label="세로 간격 (m)"
-                              value={objectArray.gapY}
-                              min={0}
-                              max={20}
-                              step={0.1}
-                              onCommit={(gapY) => updateObjectArray({ gapY })}
-                            />
-                          </div>
-                          <p>
-                            {objectArray.columns * objectArray.rows}개를 클릭 한 번으로 배치합니다.
-                          </p>
-                        </>
-                      )}
-                      {placementMode === 'single' && (
-                        <p>도면 클릭 한 번에 물품 1개를 배치합니다.</p>
-                      )}
-                      <p>
-                        기존 물품과 가까워지면 정렬·같은 간격·아랫줄 시작선에 자동으로 맞춰집니다.
-                      </p>
+                          <button
+                            type="button"
+                            aria-pressed={placementMode === 'single'}
+                            onClick={() => selectPlacementMode('single')}
+                          >
+                            한 개씩
+                          </button>
+                          <button
+                            type="button"
+                            aria-pressed={placementMode === 'array'}
+                            onClick={() => selectPlacementMode('array')}
+                          >
+                            여러 개 배열
+                          </button>
+                        </div>
+                        {placementMode === 'array' && (
+                          <>
+                            <div className={styles.arrayFields}>
+                              <ObjectArrayInput
+                                label="가로 개수"
+                                value={objectArray.columns}
+                                min={1}
+                                max={Math.floor(100 / objectArray.rows)}
+                                step={1}
+                                onCommit={(columns) => updateObjectArray({ columns })}
+                              />
+                              <ObjectArrayInput
+                                label="세로 개수"
+                                value={objectArray.rows}
+                                min={1}
+                                max={Math.floor(100 / objectArray.columns)}
+                                step={1}
+                                onCommit={(rows) => updateObjectArray({ rows })}
+                              />
+                              <ObjectArrayInput
+                                label="가로 간격 (m)"
+                                value={objectArray.gapX}
+                                min={0}
+                                max={20}
+                                step={0.1}
+                                onCommit={(gapX) => updateObjectArray({ gapX })}
+                              />
+                              <ObjectArrayInput
+                                label="세로 간격 (m)"
+                                value={objectArray.gapY}
+                                min={0}
+                                max={20}
+                                step={0.1}
+                                onCommit={(gapY) => updateObjectArray({ gapY })}
+                              />
+                            </div>
+                            <p>
+                              {objectArray.columns * objectArray.rows}개를 클릭 한 번으로
+                              배치합니다.
+                            </p>
+                          </>
+                        )}
+                        {placementMode === 'single' && (
+                          <p>도면 클릭 한 번에 물품 1개를 배치합니다.</p>
+                        )}
+                        <p>
+                          기존 물품과 가까워지면 정렬·같은 간격·아랫줄 시작선에 자동으로 맞춰집니다.
+                        </p>
                       </div>
                     )}
                     <details className={styles.placementDetails}>
@@ -1437,11 +1490,13 @@ export function App() {
                   {selectedObject.wallOpening && (
                     <p>출입구는 벽을 따라 이동합니다. 방향은 벽과 방 구조에 맞춰집니다.</p>
                   )}
-                  {!selectedObject.wallOpening && <ObjectRotationInput
-                    key={`${selectedObject.id}-rotation`}
-                    rotation={selectedObject.rotation}
-                    onCommit={(rotation) => updateLayoutObject(selectedObject.id, { rotation })}
-                  />}
+                  {!selectedObject.wallOpening && (
+                    <ObjectRotationInput
+                      key={`${selectedObject.id}-rotation`}
+                      rotation={selectedObject.rotation}
+                      onCommit={(rotation) => updateLayoutObject(selectedObject.id, { rotation })}
+                    />
+                  )}
                 </fieldset>
               </div>
             </InspectorSection>

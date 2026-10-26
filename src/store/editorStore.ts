@@ -28,6 +28,7 @@ interface EditorState {
   roomEditPreview: { roomId: string; vertices: Point[] } | null;
   geometryError: RoomEditError | null;
   setActiveFloor: (floorId: string) => boolean;
+  openProject: (projectId: string, floorId: string) => void;
   setTool: (tool: EditorTool) => void;
   setPaletteItem: (item: PaletteItem) => void;
   setObjectSet: (setId: string) => void;
@@ -103,11 +104,36 @@ export const useEditorStore = create<EditorState>((set) => ({
     });
     return switched;
   },
+  openProject: (projectId, floorId) =>
+    set({
+      activeProjectId: projectId,
+      activeFloorId: floorId,
+      selectedObjectIds: [],
+      editingGroupId: null,
+      tool: 'select',
+      selectedPaletteItemId: null,
+      selectedObjectSetId: null,
+      objectEditPreview: null,
+      objectMovePreviewById: null,
+      objectClipboard: [],
+      clipboardPasteCount: 0,
+      viewport: DEFAULT_VIEWPORT,
+      roomDraftVertices: [],
+      divisionDraft: null,
+      selectedRoomId: null,
+      selectedWallIndex: null,
+      roomEditPreview: null,
+      geometryError: null,
+    }),
   setTool: (tool) =>
     set((state) =>
       state.tool === tool
         ? state
-        : { tool, divisionDraft: null, editingGroupId: tool === 'select' ? state.editingGroupId : null },
+        : {
+            tool,
+            divisionDraft: null,
+            editingGroupId: tool === 'select' ? state.editingGroupId : null,
+          },
     ),
   setPaletteItem: (item) =>
     set({
@@ -183,9 +209,10 @@ export const useEditorStore = create<EditorState>((set) => ({
       const floorObjects = (project.floorsById[state.activeFloorId ?? '']?.objectIds ?? [])
         .map((id) => project.objectsById[id])
         .filter((item) => item != null);
-      const ids = object?.groupId && state.editingGroupId !== object.groupId
-        ? groupMemberIds(floorObjects, object.groupId)
-        : [objectId];
+      const ids =
+        object?.groupId && state.editingGroupId !== object.groupId
+          ? groupMemberIds(floorObjects, object.groupId)
+          : [objectId];
       const current = new Set(state.selectedObjectIds);
       if (ids.every((id) => current.has(id))) ids.forEach((id) => current.delete(id));
       else ids.forEach((id) => current.add(id));

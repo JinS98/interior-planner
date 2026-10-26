@@ -5,3 +5,5 @@ coverage/
 .env.local
 .DS_Store
 *.tsbuildinfo
+firebase-debug.log
+firestore-debug.log

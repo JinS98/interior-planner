@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "firebase": "^13.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "three": "^0.186.1",
