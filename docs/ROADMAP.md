@@ -140,7 +140,7 @@
 
 완료 기준: 단일 층 편집과 다층·그룹·자동 배치·3D 미리보기 흐름을 배포 URL에서 시연 가능.
 
-배포: Firebase 기본 Hosting 사이트 [interior-planner-24d70.web.app](https://interior-planner-24d70.web.app)에 앱을 게시했습니다. 공개 URL에서 첫 페이지, JavaScript·CSS 자산, 하위 경로의 앱 재작성을 확인했습니다. 실제 계정으로 로그인하고 저장·재접속하는 브라우저 흐름은 아직 확인하지 않았습니다.
+배포: Firebase 기본 Hosting 사이트 [interior-planner-24d70.web.app](https://interior-planner-24d70.web.app)과 추가 사이트 [interior-plan.web.app](https://interior-plan.web.app)에 앱을 게시했습니다. 추가 사이트를 Firebase Authentication 승인 도메인에도 등록했습니다. 공개 URL에서 첫 페이지, JavaScript·CSS 자산, 하위 경로의 앱 재작성을 확인했습니다. 실제 계정으로 로그인하고 저장·재접속하는 브라우저 흐름은 아직 확인하지 않았습니다.
 
 ## 이후 후보
 

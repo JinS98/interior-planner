@@ -73,13 +73,15 @@ firebase emulators:exec --only auth,firestore --project demo-interior-planner "n
 
 ## Firebase Hosting 배포
 
-`firebase.json`은 기본 Hosting 사이트 `interior-planner-24d70`에 Vite의 `dist`를 게시하고 모든 앱 경로를 `index.html`로 연결합니다. 배포 전에 `.env.local`에 해당 Firebase 프로젝트의 웹 앱 설정값이 있어야 합니다. Hosting 배포 명령은 프로덕션 빌드를 먼저 실행합니다.
+`firebase.json`은 기본 사이트 `interior-planner-24d70`과 추가 사이트 `interior-plan`에 Vite의 `dist`를 게시하고 모든 앱 경로를 `index.html`로 연결합니다. 배포 전에 `.env.local`에 해당 Firebase 프로젝트의 웹 앱 설정값이 있어야 합니다. Hosting 배포 명령은 프로덕션 빌드를 먼저 실행합니다.
 
 ```powershell
 firebase deploy --only hosting --project interior-planner-24d70
 ```
 
-공개 주소: https://interior-planner-24d70.web.app
+추가 사이트만 배포할 때는 `firebase deploy --only hosting:interior-plan --project interior-planner-24d70`을 실행합니다. Firebase Authentication 승인 도메인에 `interior-plan.web.app`이 등록되어 있습니다.
+
+공개 주소: https://interior-planner-24d70.web.app · https://interior-plan.web.app
 
 ## 디렉터리
 
