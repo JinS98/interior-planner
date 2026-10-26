@@ -135,10 +135,12 @@
 - [ ] 그리기→편집→Undo→저장→재접속→복원 핵심 흐름 테스트
 - [ ] 다층 전환·그룹 편집·자동 배치·3D 미리보기까지 연결한 통합 흐름 확인
 - [ ] 로딩·빈 화면·오류 UI와 기본 편집 반응성 점검
-- [ ] Firebase Hosting 또는 Vercel 배포 및 실제 URL 재검증
+- [x] Firebase Hosting 또는 Vercel 배포 및 실제 URL 재검증
 - [ ] README/노션에 화면, 구조 선택과 측정한 성능만 기록
 
 완료 기준: 단일 층 편집과 다층·그룹·자동 배치·3D 미리보기 흐름을 배포 URL에서 시연 가능.
+
+배포: Firebase 기본 Hosting 사이트 [interior-planner-24d70.web.app](https://interior-planner-24d70.web.app)에 앱을 게시했습니다. 공개 URL에서 첫 페이지, JavaScript·CSS 자산, 하위 경로의 앱 재작성을 확인했습니다. 실제 계정으로 로그인하고 저장·재접속하는 브라우저 흐름은 아직 확인하지 않았습니다.
 
 ## 이후 후보
 

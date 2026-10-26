@@ -54,13 +54,13 @@ npm run dev
 
 방을 나누려면 **분할** 도구를 선택하고 첫 번째 경계점, 필요한 내부 꺾임점, 반대쪽 경계점을 차례로 클릭합니다. 꺾임점 없이 끝내면 직선으로 분할됩니다. 벽 위의 격자 교차점과 꼭짓점에 맞춰집니다. 예를 들어 3×2m 방의 오른쪽 위를 ㄱ자로 나누면 1㎡와 5㎡가 됩니다. `Esc` 또는 `Backspace`를 누를 때마다 직전 꺾임점이나 시작점을 한 개씩 되돌립니다.
 
-**진행 상태:** 2D·3D 편집 기능에 Firebase Auth와 Firestore 프로젝트 생성·목록·저장·불러오기를 연결했습니다. 자동 저장과 소유자별 접근 규칙은 로컬 에뮬레이터에서 검증했습니다. 실제 Firebase 프로젝트의 규칙 게시와 재접속 확인은 별도로 필요합니다.
+**진행 상태:** 2D·3D 편집 기능에 Firebase Auth와 Firestore 프로젝트 생성·목록·저장·불러오기를 연결했습니다. 자동 저장과 소유자별 접근 규칙은 로컬 에뮬레이터에서 검증했고, 규칙은 실제 Firebase 프로젝트에도 게시했습니다. 앱은 [Firebase Hosting](https://interior-planner-24d70.web.app)에 배포했습니다. 실제 계정으로 로그인·재접속해 도면이 복원되는지는 별도 확인이 필요합니다.
 
 ## Firebase 연결
 
 1. `.env.example`을 `.env.local`로 복사하고 Firebase 콘솔의 웹 앱 **Config** 값을 채웁니다. `.env.local`은 Git에서 제외됩니다. 값을 바꾼 뒤 개발 서버를 다시 시작합니다.
 2. Firebase Authentication에서 Google 또는 이메일/비밀번호 로그인을 활성화하고, 개발용 `localhost`를 승인된 도메인에 추가합니다.
-3. Cloud Firestore의 **규칙** 탭에 `firestore.rules` 내용을 게시합니다. 이 규칙은 `/users/{uid}/projects/{projectId}`와 그 데이터 문서를 해당 로그인 사용자만 읽고 쓰도록 제한합니다. 저장소의 규칙 파일만 변경해서는 콘솔 규칙이 바뀌지 않습니다.
+3. Cloud Firestore의 보안 규칙은 현재 프로젝트에 게시되어 있습니다. 변경할 때는 `firebase deploy --only firestore:rules --project interior-planner-24d70`을 실행합니다. 이 규칙은 `/users/{uid}/projects/{projectId}`와 그 데이터 문서를 해당 로그인 사용자만 읽고 쓰도록 제한합니다.
 4. 로그인한 뒤 **새 프로젝트 만들기**에서 이름을 입력합니다. 확정된 편집은 0.8초 뒤 자동 저장됩니다. 상단에 `자동 저장 대기 중`·`저장 중`·`저장됨`·`저장 실패` 상태가 표시되고, 실패하면 자동 재시도하거나 **다시 시도**를 누를 수 있습니다. 프로젝트 목록으로 이동하거나 로그아웃할 때도 최신 편집의 저장이 완료될 때까지 기다립니다.
 
 저장 실패가 계속되면 화면을 닫기 전에 오류를 해결하고 **다시 시도**하세요. 저장되지 않은 변경이 있을 때는 페이지 이탈 경고가 표시됩니다. 저장되는 데이터는 프로젝트·층·공간·물품·팔레트·세트입니다. 선택, 화면 위치, 드래그 미리보기, Undo/Redo 기록은 저장하지 않습니다.
@@ -70,6 +70,16 @@ npm run dev
 ```powershell
 firebase emulators:exec --only auth,firestore --project demo-interior-planner "npm test -- src/services/firebase.integration.test.ts"
 ```
+
+## Firebase Hosting 배포
+
+`firebase.json`은 기본 Hosting 사이트 `interior-planner-24d70`에 Vite의 `dist`를 게시하고 모든 앱 경로를 `index.html`로 연결합니다. 배포 전에 `.env.local`에 해당 Firebase 프로젝트의 웹 앱 설정값이 있어야 합니다. Hosting 배포 명령은 프로덕션 빌드를 먼저 실행합니다.
+
+```powershell
+firebase deploy --only hosting --project interior-planner-24d70
+```
+
+공개 주소: https://interior-planner-24d70.web.app
 
 ## 디렉터리
 
